@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Circle, HelpCircle, ListChecks, LogOut, Plus, RotateCcw, Send, Shield, ShieldAlert, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { useFeature } from './FeatureGate';
+import PhotoPicker from './PhotoPicker';
 import { apiFetch, authHeaders } from '../auth';
 import { AGE_CONFIG, MEMBERS, SEED_CHORES } from '../household';
 import { useChores } from '../useChores';
@@ -10,6 +11,21 @@ const MOBILE_QUERY = '(max-width: 720px)';
 // Matches the server: a guide still writing after this long was cut off and can be retried
 const GUIDE_STALE_MS = 5 * 60 * 1000;
 const TASK_PROMPTS = ['Give me a tip', 'How can I make it faster?', 'I\'m stuck on a step'];
+// Sent when a photo goes out with no question typed
+const PHOTO_QUESTION = 'Can you take a look at this photo?';
+
+// The photo waiting to be sent with the next question, with a button to drop it
+function PendingPhoto({ photo, onRemove }) {
+  return (
+    <div style={styles.pendingPhoto}>
+      <img src={photo.previewUrl} alt="Photo to send" style={styles.pendingPhotoImg} />
+      <span style={{ flex: 1 }}>Photo ready to send</span>
+      <button type="button" onClick={onRemove} style={styles.pendingPhotoRemove} aria-label="Remove photo">
+        <X size={16} />
+      </button>
+    </div>
+  );
+}
 
 // Earlier turns for the AI routes: real exchanges only (no error notes), trimmed to the server's limits
 function toHistory(messages, max) {
@@ -54,6 +70,9 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
   // Kids only see AI picture guides with AI Media Generation on; teens and adults always do
   const canMakePictures = useFeature('ai-media-generation');
   const showAiPictures = ageMode !== 'kid' || canMakePictures;
+  // Photos in the chats need AI Media Upload for kids and teens; adults always have it (as on the server)
+  const canUploadMedia = useFeature('ai-media-upload');
+  const canSendPhotos = canUseAi && (ageMode === 'adult' || canUploadMedia);
   const isMobile = useIsMobile();
 
   // In a family, chores are shared and assigned to real people; otherwise they're local, assigned to age groups
@@ -75,11 +94,13 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
   const [messages, setMessages] = useState([{ role: 'assistant', text: config.helperIntro }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [photo, setPhoto] = useState(null);
   const messagesRef = useRef(null);
 
   // Task chat inside the drawer: one short conversation per chore
   const [taskChats, setTaskChats] = useState({});
   const [taskInput, setTaskInput] = useState('');
+  const [taskPhoto, setTaskPhoto] = useState(null);
   const [taskLoading, setTaskLoading] = useState(false);
   const taskMessagesRef = useRef(null);
 
@@ -111,6 +132,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
 
   useEffect(() => {
     setTaskInput('');
+    setTaskPhoto(null);
   }, [selectedChoreId]);
 
   const visibleChores = config.seesWholeFamily
@@ -219,11 +241,13 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
   };
 
   const askHelper = async (text) => {
-    const question = (text ?? input).trim();
+    const question = (text ?? input).trim() || (photo ? PHOTO_QUESTION : '');
     if (!question || loading) return;
 
+    const sentPhoto = photo;
     setInput('');
-    const next = [...messages, { role: 'user', text: question }];
+    setPhoto(null);
+    const next = [...messages, { role: 'user', text: question, ...(sentPhoto && { imageUrl: sentPhoto.previewUrl }) }];
     setMessages(next);
     setLoading(true);
 
@@ -233,7 +257,13 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
       const res = await fetch(isParent ? '/api/ai/parent-assistant' : '/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-        body: JSON.stringify({ message: question, ageMode, sessionId, ...(isParent && { history: toHistory(messages, 20) }) })
+        body: JSON.stringify({
+          message: question,
+          ageMode,
+          sessionId,
+          ...(isParent && { history: toHistory(messages, 20) }),
+          ...(sentPhoto && { image: { mimeType: sentPhoto.mimeType, data: sentPhoto.data } })
+        })
       });
       const data = await res.json();
       setMessages([
@@ -266,13 +296,15 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
 
   const askAboutTask = async (text) => {
     const chore = selectedChore;
-    const question = (text ?? taskInput).trim();
+    const question = (text ?? taskInput).trim() || (taskPhoto ? PHOTO_QUESTION : '');
     if (!chore || !question || taskLoading) return;
 
+    const sentPhoto = taskPhoto;
     const previous = taskChats[chore.id] || [];
     const appendTo = (msg) => setTaskChats(prev => ({ ...prev, [chore.id]: [...(prev[chore.id] || []), msg] }));
     setTaskInput('');
-    appendTo({ role: 'user', text: question });
+    setTaskPhoto(null);
+    appendTo({ role: 'user', text: question, ...(sentPhoto && { imageUrl: sentPhoto.previewUrl }) });
     setTaskLoading(true);
 
     try {
@@ -284,7 +316,8 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
           history: toHistory(previous, 10),
           message: question,
           ageMode,
-          sessionId
+          sessionId,
+          ...(sentPhoto && { image: { mimeType: sentPhoto.mimeType, data: sentPhoto.data } })
         })
       });
       const data = await res.json();
@@ -492,6 +525,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                           borderColor: msg.role === 'user' ? config.accent : '#334155'
                         }}
                       >
+                        {msg.imageUrl && <img src={msg.imageUrl} alt="Photo you sent" style={styles.bubblePhoto} />}
                         <RichText text={msg.text} />
                         {msg.proposedChores && (
                           <div style={styles.proposalCard}>
@@ -528,7 +562,13 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                   )}
                 </div>
 
+                {photo && <PendingPhoto photo={photo} onRemove={() => setPhoto(null)} />}
+
+                {/* Without a text box (kids), the photo buttons sit with the questions: pick a photo, then tap a question */}
                 <div style={{ ...styles.promptRow, ...(isMobile && styles.promptRowMobile) }}>
+                  {canSendPhotos && !config.helperFreeText && (
+                    <PhotoPicker onPick={setPhoto} disabled={loading} accent={config.accent} buttonStyle={{ minHeight: 36, width: 40, borderRadius: 9999 }} />
+                  )}
                   {config.helperPrompts.map(p => (
                     <button key={p} onClick={() => askHelper(p)} style={{ ...styles.promptChip, ...(isMobile && { flexShrink: 0 }) }} disabled={loading}>{p}</button>
                   ))}
@@ -536,6 +576,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
 
                 {config.helperFreeText && (
                   <form onSubmit={(e) => { e.preventDefault(); askHelper(); }} style={styles.addForm}>
+                    {canSendPhotos && <PhotoPicker onPick={setPhoto} disabled={loading} accent={config.accent} />}
                     <input
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
@@ -545,7 +586,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                       disabled={loading}
                       enterKeyHint="send"
                     />
-                    <button type="submit" style={accentButton} disabled={loading || !input.trim()} aria-label="Ask">
+                    <button type="submit" style={accentButton} disabled={loading || (!input.trim() && !photo)} aria-label="Ask">
                       <Send size={16} /> {!isMobile && 'Ask'}
                     </button>
                   </form>
@@ -723,6 +764,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                   <div ref={taskMessagesRef} className="household-task-chat-messages">
                     {(taskChats[selectedChore.id] || []).map((msg, idx) => (
                       <div key={idx} className={`household-task-chat-bubble is-${msg.role}`}>
+                        {msg.imageUrl && <img src={msg.imageUrl} alt="Photo you sent" className="household-task-chat-photo" />}
                         <RichText text={msg.text} />
                       </div>
                     ))}
@@ -736,7 +778,24 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                     ))}
                   </div>
                 )}
+                {taskPhoto && (
+                  <div className="household-task-chat-pending">
+                    <img src={taskPhoto.previewUrl} alt="Photo to send" />
+                    <span>Photo ready to send</span>
+                    <button type="button" onClick={() => setTaskPhoto(null)} aria-label="Remove photo">
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
                 <form className="household-task-chat-form" onSubmit={(e) => { e.preventDefault(); askAboutTask(); }}>
+                  {canSendPhotos && (
+                    <PhotoPicker
+                      onPick={setTaskPhoto}
+                      disabled={taskLoading}
+                      accent={config.accent}
+                      buttonStyle={{ color: '#6b4fa3', background: '#fff', border: '1px solid #ded3f4', borderRadius: 12 }}
+                    />
+                  )}
                   <input
                     value={taskInput}
                     onChange={(e) => setTaskInput(e.target.value)}
@@ -745,7 +804,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                     disabled={taskLoading}
                     enterKeyHint="send"
                   />
-                  <button type="submit" style={{ backgroundColor: config.accent }} disabled={taskLoading || !taskInput.trim()} aria-label="Ask">
+                  <button type="submit" style={{ backgroundColor: config.accent }} disabled={taskLoading || (!taskInput.trim() && !taskPhoto)} aria-label="Ask">
                     <Send size={16} />
                   </button>
                 </form>
@@ -1194,6 +1253,41 @@ const styles = {
     fontSize: '14px',
     lineHeight: 1.55,
     overflowWrap: 'anywhere',
+  },
+  bubblePhoto: {
+    display: 'block',
+    maxWidth: '100%',
+    maxHeight: '220px',
+    borderRadius: '8px',
+    marginBottom: '6px',
+  },
+  pendingPhoto: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    marginBottom: '8px',
+    padding: '6px 8px',
+    border: '1px solid #334155',
+    borderRadius: '10px',
+    color: '#cbd5e1',
+    fontSize: '13px',
+  },
+  pendingPhotoImg: {
+    width: '44px',
+    height: '44px',
+    objectFit: 'cover',
+    borderRadius: '6px',
+  },
+  pendingPhotoRemove: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '32px',
+    height: '32px',
+    background: 'none',
+    border: 'none',
+    color: '#94a3b8',
+    cursor: 'pointer',
   },
   promptRow: {
     display: 'flex',

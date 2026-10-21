@@ -284,6 +284,21 @@
   border-radius: 12px;
   cursor: pointer;
 }
+.household-task-chat-photo { display: block; max-width: 100%; max-height: 200px; margin-bottom: 6px; border-radius: 10px; }
+.household-task-chat-pending {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  color: #43506e;
+  font-size: 13px;
+  background: #fff;
+  border: 1px solid #ded3f4;
+  border-radius: 12px;
+}
+.household-task-chat-pending img { width: 44px; height: 44px; object-fit: cover; border-radius: 8px; }
+.household-task-chat-pending span { flex: 1; }
+.household-task-chat-pending button { display: grid; place-items: center; width: 32px; height: 32px; color: #8960c8; background: none; border: none; cursor: pointer; }
 .household-task-chat-form button:disabled,
 .household-task-chat-chips button:disabled { opacity: .5; cursor: default; }
 

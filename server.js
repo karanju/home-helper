@@ -5,8 +5,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { callGemini, candidateText, GeminiUnavailableError } from './ai/gemini.js';
-import { AGE_MODES, SYSTEM_PROMPTS, chatGenerationConfig } from './ai/prompts.js';
-import { InputError } from './ai/validate.js';
+import { AGE_MODES, IMAGE_RULES, SYSTEM_PROMPTS, chatGenerationConfig } from './ai/prompts.js';
+import { InputError, optionalImage, toGeminiContents } from './ai/validate.js';
 import { generateInstructions, parseInstructionsInput } from './ai/instructions.js';
 import { generateChorePoster, parseImageInput, ImageError, IMAGES_DIR, IMAGES_URL_PREFIX } from './ai/images.js';
 import { parseTaskChatInput, runTaskChat } from './ai/taskChat.js';
@@ -43,7 +43,8 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.use(cors());
-app.use(express.json());
+// Chat photos arrive as base64 (up to 1.5 MB decoded)
+app.use(express.json({ limit: '3mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Request logging
@@ -825,6 +826,11 @@ function sendAiError(res, err, label) {
   res.status(500).json({ error: 'Internal server error processing request', details: err.message });
 }
 
+// Chat photos need AI Media Upload on top of AI Chat (adults always have it)
+function sendPhotoLocked(res) {
+  return res.status(403).json({ error: 'Photo upload is turned off for this account.', code: 'PERMISSION_REQUIRED' });
+}
+
 // 3. Gemini API ask endpoint (gated by k-ID server-side claim verification)
 app.post('/api/ask', async (req, res) => {
   try {
@@ -846,17 +852,14 @@ app.post('/api/ask', async (req, res) => {
       return res.status(403).json({ error: 'AI chat is turned off for this account.', code: 'PERMISSION_REQUIRED' });
     }
     const validAgeMode = access.ageMode;
+    const image = optionalImage(req.body.image);
+    if (image && !access.can('ai-media-upload')) return sendPhotoLocked(res);
 
     const { candidate, model } = await callGemini({
       systemInstruction: {
-        parts: [{ text: SYSTEM_PROMPTS[validAgeMode] }]
+        parts: [{ text: SYSTEM_PROMPTS[validAgeMode] + (image ? '\n' + IMAGE_RULES : '') }]
       },
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: message.trim() }]
-        }
-      ],
+      contents: toGeminiContents([], message.trim(), image),
       generationConfig: chatGenerationConfig(validAgeMode)
     });
 
@@ -926,6 +929,7 @@ app.post('/api/ai/task-chat', async (req, res) => {
     if (!access.can('ai-chat')) {
       return res.status(403).json({ error: 'AI chat is turned off for this account.', code: 'PERMISSION_REQUIRED' });
     }
+    if (input.image && !access.can('ai-media-upload')) return sendPhotoLocked(res);
 
     res.json(await runTaskChat(access.ageMode, input));
   } catch (err) {

@@ -44,13 +44,28 @@ export function chatHistory(value, { max, maxLength }) {
   });
 }
 
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_IMAGE_BYTES = 1.5 * 1024 * 1024;
+
+// A photo from the chat: { mimeType, data } with data as plain base64
+export function optionalImage(value) {
+  if (value === undefined || value === null) return null;
+  if (!IMAGE_TYPES.includes(value?.mimeType)) throw new InputError(`image.mimeType must be one of ${IMAGE_TYPES.join(', ')}.`);
+  const data = typeof value.data === 'string' ? value.data : '';
+  if (!data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new InputError('image.data must be base64.');
+  if (data.length * 3 / 4 > MAX_IMAGE_BYTES) throw new InputError('image is too large (max 1.5 MB).');
+  return { mimeType: value.mimeType, data };
+}
+
 // Gemini contents for a conversation. Gemini wants the first turn to come from the user,
-// so a leading assistant greeting is dropped.
-export function toGeminiContents(history, message) {
+// so a leading assistant greeting is dropped. A photo goes with the new message only.
+export function toGeminiContents(history, message, image = null) {
   const turns = [...history, { role: 'user', text: message }];
   const firstUser = turns.findIndex(turn => turn.role === 'user');
-  return turns.slice(firstUser).map(turn => ({
+  const contents = turns.slice(firstUser).map(turn => ({
     role: turn.role === 'assistant' ? 'model' : 'user',
     parts: [{ text: turn.text }]
   }));
+  if (image) contents.at(-1).parts.unshift({ inlineData: { mimeType: image.mimeType, data: image.data } });
+  return contents;
 }
