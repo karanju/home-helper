@@ -2,7 +2,7 @@ import React from 'react';
 import { KidSettingsProvider, KidSettings } from '@k-id/core';
 import { X, Shield } from 'lucide-react';
 
-export default function SettingsModal({ sessionId, isOpen, onClose }) {
+export default function SettingsModal({ sessionId, challengeId, onChallenge, isOpen, onClose }) {
   if (!isOpen) return null;
 
   return (
@@ -24,7 +24,7 @@ export default function SettingsModal({ sessionId, isOpen, onClose }) {
 
         <div style={styles.content}>
           {sessionId ? (
-            <KidSettingsProvider sessionId={sessionId}>
+            <KidSettingsProvider sessionId={sessionId} challengeId={challengeId} onChallenge={onChallenge}>
               <KidSettings />
             </KidSettingsProvider>
           ) : (

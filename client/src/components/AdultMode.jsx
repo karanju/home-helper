@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Home, Utensils, Calendar, CheckSquare, Send, Sparkles, LogOut, Plus, Trash2, Shield, ShieldAlert } from 'lucide-react';
 import { KidPermission } from '@k-id/core';
+import { authHeaders } from '../auth';
 
 export default function AdultMode({ onSignOut, sessionId, onOpenSettings }) {
   const [activeTab, setActiveTab] = useState('assistant');
@@ -34,7 +35,7 @@ export default function AdultMode({ onSignOut, sessionId, onOpenSettings }) {
     try {
       const res = await fetch('/api/ask', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ message: textToSend, ageMode: 'adult', sessionId })
       });
 

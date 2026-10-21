@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   KidCoreProvider,
   KidSessionProvider,
@@ -14,7 +14,10 @@ import KidMode from './components/KidMode';
 import TeenMode from './components/TeenMode';
 import AdultMode from './components/AdultMode';
 import SettingsModal from './components/SettingsModal';
-import { Shield, Sparkles, Clock, AlertTriangle, XCircle, Sliders } from 'lucide-react';
+import AuthScreen from './components/AuthScreen';
+import FamilyPanel from './components/FamilyPanel';
+import { apiFetch, authHeaders, getAuthToken, setAuthToken } from './auth';
+import { Shield, Sparkles, Clock, AlertTriangle, XCircle, Sliders, Users, LogOut } from 'lucide-react';
 
 const K_ID_CONFIG = {
   publishableKey: 'kgp_test_ckcqom36ppaaaeytysmy4puoznneommzdbrfljfiheuwewt4aiulgxeqf3q77xy',
@@ -36,11 +39,11 @@ const K_ID_CONFIG = {
 };
 
 // Inner component rendered once the player passes the k-ID age gate
-function VerifiedApp({ sessionId, forcedMode, onSignOut, onOpenSettings }) {
+function VerifiedApp({ sessionId, forcedMode, serverAgeMode, onSignOut, onOpenSettings }) {
   const { session, ageVerification } = useKidSession();
 
-  // Determine age mode from verified age or fallback
-  let resolvedMode = forcedMode;
+  // The server's mode (read from this user's own k-ID session) wins; the SDK's view covers the moment before it loads
+  let resolvedMode = forcedMode || serverAgeMode;
   if (!resolvedMode) {
     if (ageVerification?.verifiedAge != null) {
       const age = ageVerification.verifiedAge;
@@ -48,12 +51,13 @@ function VerifiedApp({ sessionId, forcedMode, onSignOut, onOpenSettings }) {
       else if (age < 18) resolvedMode = 'teen';
       else resolvedMode = 'adult';
     } else if (session?.ageStatus) {
+      // Same mapping as deriveAgeMode in server.js: unknown statuses get the most restrictive mode
       const status = session.ageStatus.toUpperCase();
-      if (status.includes('CHILD') || status.includes('UNDER')) resolvedMode = 'kid';
-      else if (status.includes('TEEN')) resolvedMode = 'teen';
-      else resolvedMode = 'adult';
+      if (status.includes('ADULT')) resolvedMode = 'adult';
+      else if (status.includes('YOUTH') || status.includes('TEEN')) resolvedMode = 'teen';
+      else resolvedMode = 'kid';
     } else {
-      resolvedMode = 'teen'; // Default fallback
+      resolvedMode = 'kid'; // Default fallback
     }
   }
 
@@ -71,11 +75,63 @@ function VerifiedApp({ sessionId, forcedMode, onSignOut, onOpenSettings }) {
 }
 
 export default function App() {
-  // Session persistence across launches
-  const [sessionId, setSessionId] = useState(() => localStorage.getItem('kid_session_id') || undefined);
-  const [challengeId, setChallengeId] = useState(() => localStorage.getItem('kid_challenge_id') || undefined);
+  // The logged-in account from /api/me; its k-ID ids persist the session across launches and devices
+  const [me, setMe] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(() => Boolean(getAuthToken()));
+  const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite'));
   const [forcedAgeMode, setForcedAgeMode] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFamilyOpen, setIsFamilyOpen] = useState(false);
+  // Bumped to remount <KidSessionProvider>, which is how the k-ID flow resets
+  const [flowKey, setFlowKey] = useState(0);
+
+  const sessionId = me?.user.kidSessionId || undefined;
+  const challengeId = me?.user.kidChallengeId || undefined;
+
+  const refreshMe = useCallback(async () => {
+    if (!getAuthToken()) {
+      setMe(null);
+      setIsAuthLoading(false);
+      return;
+    }
+    try {
+      setMe(await apiFetch('/api/me'));
+    } catch (err) {
+      console.error('[Auth] Could not load account:', err);
+      if (err.status === 401) {
+        setAuthToken(null);
+        setMe(null);
+      }
+    } finally {
+      setIsAuthLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshMe();
+  }, [refreshMe]);
+
+  const clearInvite = useCallback(() => {
+    setInviteToken(null);
+    const url = new URL(window.location);
+    url.searchParams.delete('invite');
+    window.history.replaceState({}, '', url);
+  }, []);
+
+  // A logged-in user who opens an invite link without a family gets the join prompt
+  useEffect(() => {
+    if (!me || !inviteToken) return;
+    if (me.family) clearInvite();
+    else setIsFamilyOpen(true);
+  }, [me, inviteToken, clearInvite]);
+
+  const saveKidIds = async (ids) => {
+    try {
+      await apiFetch('/api/me/kid-session', { method: 'POST', body: ids });
+    } catch (err) {
+      console.error('[k-ID] Failed to save k-ID ids on the account:', err);
+    }
+  };
 
   // Check ?mock-age=kid|teen|adult query parameter
   useEffect(() => {
@@ -90,9 +146,9 @@ export default function App() {
   // k-ID Handlers
   const handleSession = async (newSessionId) => {
     console.log('[k-ID] onSession established:', newSessionId);
-    setSessionId(newSessionId);
     if (newSessionId) {
-      localStorage.setItem('kid_session_id', newSessionId);
+      await saveKidIds({ sessionId: newSessionId });
+      refreshMe();
 
       // Tell backend that onSession fired so it checks the challengeId with secret key
       try {
@@ -111,10 +167,20 @@ export default function App() {
 
   const handleChallenge = (newChallengeId) => {
     console.log('[k-ID] onChallenge issued:', newChallengeId);
-    setChallengeId(newChallengeId);
     if (newChallengeId) {
-      localStorage.setItem('kid_challenge_id', newChallengeId);
+      saveKidIds({ challengeId: newChallengeId });
     }
+  };
+
+  const handleSettingsChallenge = (newChallengeId) => {
+    saveKidIds({ settingsChallengeId: newChallengeId });
+  };
+
+  // Forget this account's k-ID flow and start the age check over
+  const handleRestartAgeCheck = async () => {
+    await saveKidIds({ sessionId: null, challengeId: null });
+    await refreshMe();
+    setFlowKey((k) => k + 1);
   };
 
   const handleClaim = async (claimToken) => {
@@ -122,7 +188,7 @@ export default function App() {
     try {
       const res = await fetch('/api/claim', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ claimToken })
       });
       const data = await res.json();
@@ -132,11 +198,16 @@ export default function App() {
     }
   };
 
-  const handleSignOut = () => {
-    localStorage.removeItem('kid_session_id');
-    localStorage.removeItem('kid_challenge_id');
-    setSessionId(undefined);
-    setChallengeId(undefined);
+  const handleSignOut = async () => {
+    try {
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.warn('[Auth] Logout request failed:', err.message);
+    }
+    setAuthToken(null);
+    setMe(null);
+    setIsSettingsOpen(false);
+    setIsFamilyOpen(false);
     setForcedAgeMode(null);
 
     const url = new URL(window.location);
@@ -212,6 +283,28 @@ export default function App() {
     );
   }
 
+  if (isAuthLoading) {
+    return (
+      <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#090d16', color: '#94a3b8', padding: '40px', textAlign: 'center' }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (!me) {
+    return (
+      <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#090d16', color: '#f8fafc' }}>
+        <header style={styles.topHeader}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '26px' }}>🏠</span>
+            <span style={styles.brandTitle}>Home Helper</span>
+          </div>
+        </header>
+        <AuthScreen inviteToken={inviteToken} onAuthed={refreshMe} />
+      </div>
+    );
+  }
+
   // Full k-ID SDK Age Gate Provider flow
   return (
     <KidCoreProvider
@@ -219,7 +312,9 @@ export default function App() {
       baseUrl={K_ID_CONFIG.baseUrl}
       declare={K_ID_CONFIG.declare}
     >
+      {/* Keyed by account so switching users starts a fresh k-ID flow */}
       <KidSessionProvider
+        key={`${me.user.id}-${flowKey}`}
         jurisdiction="auto"
         sessionId={sessionId}
         challengeId={challengeId}
@@ -234,9 +329,19 @@ export default function App() {
               <span style={{ fontSize: '26px' }}>🏠</span>
               <span style={styles.brandTitle}>Home Helper</span>
             </div>
-            <div style={styles.badge}>
-              <Shield size={14} color="#818cf8" />
-              <span>k-ID Verified Gate</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <div style={styles.badge}>
+                <Shield size={14} color="#818cf8" />
+                <span>k-ID Verified Gate</span>
+              </div>
+              <button style={styles.headerBtn} onClick={() => setIsFamilyOpen(true)}>
+                <Users size={14} />
+                <span>{me.family ? me.family.name : 'Family'}</span>
+              </button>
+              <button style={styles.headerBtn} onClick={handleSignOut} title={`Signed in as ${me.user.displayName}`}>
+                <LogOut size={14} />
+                <span>Sign out</span>
+              </button>
             </div>
           </header>
 
@@ -263,7 +368,7 @@ export default function App() {
                     <p style={styles.slotDesc}>
                       Under local safety regulations, users under the required minimum age cannot access this application.
                     </p>
-                    <button onClick={handleSignOut} style={styles.retryBtn}>
+                    <button onClick={handleRestartAgeCheck} style={styles.retryBtn}>
                       Try Again
                     </button>
                   </div>
@@ -277,7 +382,7 @@ export default function App() {
                     <p style={styles.slotDesc}>
                       The age verification request was not completed or consent was declined.
                     </p>
-                    <button onClick={handleSignOut} style={styles.retryBtn}>
+                    <button onClick={handleRestartAgeCheck} style={styles.retryBtn}>
                       Start Over
                     </button>
                   </div>
@@ -291,7 +396,7 @@ export default function App() {
                     <p style={styles.slotDesc}>
                       Could not reach k-ID authentication service. Please check your connection.
                     </p>
-                    <button onClick={handleSignOut} style={styles.retryBtn}>
+                    <button onClick={() => setFlowKey((k) => k + 1)} style={styles.retryBtn}>
                       Retry Connection
                     </button>
                   </div>
@@ -302,6 +407,7 @@ export default function App() {
                   <VerifiedApp
                     sessionId={sessionId}
                     forcedMode={forcedAgeMode}
+                    serverAgeMode={me.ageMode}
                     onSignOut={handleSignOut}
                     onOpenSettings={() => setIsSettingsOpen(true)}
                   />
@@ -313,8 +419,20 @@ export default function App() {
           {/* Settings Modal */}
           <SettingsModal
             sessionId={sessionId}
+            challengeId={me.user.settingsChallengeId || undefined}
+            onChallenge={handleSettingsChallenge}
             isOpen={isSettingsOpen}
             onClose={() => setIsSettingsOpen(false)}
+          />
+
+          {/* Family Panel: create/join a family, invite, manage admins */}
+          <FamilyPanel
+            me={me}
+            isOpen={isFamilyOpen}
+            onClose={() => setIsFamilyOpen(false)}
+            onChanged={refreshMe}
+            inviteToken={inviteToken}
+            onInviteHandled={clearInvite}
           />
 
           {/* Floating Demo Bar for judges and live testing */}
@@ -368,6 +486,19 @@ const styles = {
     border: '1px solid rgba(99, 102, 241, 0.3)',
     padding: '6px 12px',
     borderRadius: '9999px',
+  },
+  headerBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    backgroundColor: '#131c2e',
+    border: '1px solid #1e293b',
+    color: '#e2e8f0',
+    padding: '6px 12px',
+    borderRadius: '9999px',
+    fontSize: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
   },
   gateMain: {
     maxWidth: '520px',

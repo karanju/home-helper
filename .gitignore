@@ -5,3 +5,4 @@ client/dist/
 .DS_Store
 *.log
 
+data/

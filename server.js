@@ -4,6 +4,17 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
+import { db, persist, getUser, findUserByLogin, getFamilyForUser, isFamilyAdmin } from './store.js';
+import {
+  hashPassword,
+  verifyPassword,
+  randomToken,
+  issueToken,
+  revokeToken,
+  userFromRequest,
+  requireAuth
+} from './auth.js';
 
 dotenv.config();
 
@@ -101,6 +112,109 @@ const playerAccounts = {
   latestSessionId: null
 };
 
+// Read a k-ID session with the secret key. Returns { ok, status, session }.
+async function fetchKidSession(sessionId) {
+  const sessionRes = await fetch(
+    `https://kai-api.test.k-id.com/api/v1/session/get?sessionId=${encodeURIComponent(sessionId)}`,
+    {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${process.env.KID_SECRET_KEY}`
+      }
+    }
+  );
+  const data = await sessionRes.json().catch(() => ({}));
+  return { ok: sessionRes.ok, status: sessionRes.status, session: data.session ?? data };
+}
+
+// Map a k-ID session to an age mode. A proven age wins; otherwise the age status decides.
+// Anything unrecognised falls back to the most restrictive mode.
+function deriveAgeMode(session) {
+  const verifiedAge = session?.ageVerification?.verifiedAge;
+  if (typeof verifiedAge === 'number') {
+    if (verifiedAge < 13) return 'kid';
+    if (verifiedAge < 18) return 'teen';
+    return 'adult';
+  }
+  const status = String(session?.ageStatus || '').toUpperCase();
+  if (status.includes('ADULT')) return 'adult';
+  if (status.includes('YOUTH') || status.includes('TEEN')) return 'teen';
+  return 'kid';
+}
+
+// sessionId -> { mode, fetchedAt }, so chat messages don't each hit k-ID
+const ageModeCache = new Map();
+const AGE_MODE_CACHE_TTL = 5 * 60 * 1000;
+
+// The user's age mode from their own k-ID session, or null when it can't be determined
+async function resolveAgeMode(user) {
+  if (!process.env.KID_SECRET_KEY || !user?.kidSessionId) return null;
+
+  const cached = ageModeCache.get(user.kidSessionId);
+  if (cached && Date.now() - cached.fetchedAt < AGE_MODE_CACHE_TTL) return cached.mode;
+
+  try {
+    const { ok, session } = await fetchKidSession(user.kidSessionId);
+    if (!ok) return null;
+    const mode = deriveAgeMode(session);
+    ageModeCache.set(user.kidSessionId, { mode, fetchedAt: Date.now() });
+    return mode;
+  } catch (err) {
+    console.warn('[k-ID Server] Age mode lookup error:', err.message);
+    return null;
+  }
+}
+
+function saveUser(user, updates) {
+  db.users[user.id] = { ...user, ...updates };
+  persist();
+  return db.users[user.id];
+}
+
+function publicUser(user) {
+  return {
+    id: user.id,
+    displayName: user.displayName,
+    email: user.email,
+    username: user.username,
+    adultVerified: user.adultVerified,
+    kidSessionId: user.kidSessionId,
+    kidChallengeId: user.kidChallengeId,
+    settingsChallengeId: user.settingsChallengeId
+  };
+}
+
+function publicFamily(family) {
+  return {
+    id: family.id,
+    name: family.name,
+    members: Object.entries(family.members).map(([userId, member]) => {
+      const user = getUser(userId);
+      return {
+        userId,
+        displayName: user?.displayName || 'Unknown',
+        role: member.role,
+        adultVerified: Boolean(user?.adultVerified),
+        joinedAt: member.joinedAt
+      };
+    })
+  };
+}
+
+function adminCount(family) {
+  return Object.values(family.members).filter((m) => m.role === 'admin').length;
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_PATTERN = /^[a-z0-9_.-]{3,30}$/;
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function getValidInvite(token) {
+  const invite = db.invites[token];
+  if (!invite || new Date(invite.expiresAt) < new Date() || !db.families[invite.familyId]) return null;
+  return invite;
+}
+
 // 1. Health check endpoint
 app.get('/health', (req, res) => {
   res.json({
@@ -173,6 +287,13 @@ app.post('/api/claim', async (req, res) => {
         unlocked: status === 'PASS' || status === 'SUCCESS',
         updatedAt: Date.now()
       });
+    }
+
+    // Link the claimed session to the logged-in account. A challengeId is only saved from onChallenge,
+    // which fires once its email is sent; an unsent challenge is not safe to resume.
+    const user = userFromRequest(req);
+    if (user && sessionId) {
+      saveUser(user, { kidSessionId: sessionId });
     }
 
     res.json({
@@ -317,6 +438,283 @@ app.post('/api/session/delete', async (req, res) => {
   }
 });
 
+// 6. Accounts
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const { displayName, email, username, password } = req.body || {};
+    const name = String(displayName || '').trim();
+    const normalizedEmail = email ? String(email).trim().toLowerCase() : null;
+    const normalizedUsername = username ? String(username).trim().toLowerCase() : null;
+
+    if (!name || name.length > 40) {
+      return res.status(400).json({ error: 'Please enter a name (up to 40 characters).' });
+    }
+    if (!normalizedEmail && !normalizedUsername) {
+      return res.status(400).json({ error: 'Please enter an email or a username.' });
+    }
+    if (normalizedEmail && !EMAIL_PATTERN.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'That email address does not look right.' });
+    }
+    if (normalizedUsername && !USERNAME_PATTERN.test(normalizedUsername)) {
+      return res.status(400).json({ error: 'Usernames are 3-30 letters, numbers, dots, dashes or underscores.' });
+    }
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({ error: 'Passwords need at least 8 characters.' });
+    }
+    if (findUserByLogin(normalizedEmail) || findUserByLogin(normalizedUsername)) {
+      return res.status(409).json({ error: 'An account with that email or username already exists.' });
+    }
+
+    const { salt, passwordHash } = await hashPassword(password);
+    const user = {
+      id: randomUUID(),
+      displayName: name,
+      email: normalizedEmail,
+      username: normalizedUsername,
+      passwordHash,
+      salt,
+      kidSessionId: null,
+      kidChallengeId: null,
+      settingsChallengeId: null,
+      adultVerified: false,
+      invitedBy: null,
+      createdAt: new Date().toISOString()
+    };
+    db.users[user.id] = user;
+    persist();
+
+    res.status(201).json({ token: issueToken(user.id) });
+  } catch (err) {
+    console.error('[Auth] Signup error:', err);
+    res.status(500).json({ error: 'Could not create the account.' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { identifier, password } = req.body || {};
+    const user = findUserByLogin(identifier);
+    if (!user || typeof password !== 'string' || !(await verifyPassword(password, user))) {
+      return res.status(401).json({ error: 'Wrong email/username or password.' });
+    }
+    res.json({ token: issueToken(user.id) });
+  } catch (err) {
+    console.error('[Auth] Login error:', err);
+    res.status(500).json({ error: 'Could not log in.' });
+  }
+});
+
+app.post('/api/auth/logout', requireAuth, (req, res) => {
+  revokeToken(req.authToken);
+  res.json({ success: true });
+});
+
+app.get('/api/me', requireAuth, async (req, res) => {
+  const { user } = req;
+  const family = getFamilyForUser(user.id);
+
+  res.json({
+    user: publicUser(user),
+    family: family ? publicFamily(family) : null,
+    isAdmin: isFamilyAdmin(family, user.id),
+    ageMode: await resolveAgeMode(user)
+  });
+});
+
+// Persist the k-ID ids from onSession / onChallenge on the account, so they follow the user across devices
+app.post('/api/me/kid-session', requireAuth, (req, res) => {
+  const fields = { sessionId: 'kidSessionId', challengeId: 'kidChallengeId', settingsChallengeId: 'settingsChallengeId' };
+  const updates = {};
+
+  for (const [bodyKey, userKey] of Object.entries(fields)) {
+    const value = req.body?.[bodyKey];
+    if (value === undefined) continue;
+    if (value !== null && typeof value !== 'string') {
+      return res.status(400).json({ error: `${bodyKey} must be a string or null` });
+    }
+    updates[userKey] = value;
+  }
+
+  const user = saveUser(req.user, updates);
+  res.json({ user: publicUser(user) });
+});
+
+// Confirm k-ID adult verification server-side; the client's word is never enough
+app.post('/api/me/verify-adult', requireAuth, async (req, res) => {
+  try {
+    if (!process.env.KID_SECRET_KEY) {
+      return res.status(503).json({ error: 'KID_SECRET_KEY is not configured on the server.' });
+    }
+    if (!req.user.kidSessionId) {
+      return res.status(409).json({ error: 'Finish the k-ID age check first.' });
+    }
+
+    const { ok, status, session } = await fetchKidSession(req.user.kidSessionId);
+    if (!ok) {
+      return res.status(502).json({ error: 'Could not read your k-ID session.', status });
+    }
+
+    const verifiedAge = session?.ageVerification?.verifiedAge;
+    const adultVerified = typeof verifiedAge === 'number' && verifiedAge >= 18;
+    const user = saveUser(req.user, { adultVerified });
+    ageModeCache.delete(user.kidSessionId);
+
+    res.json({ adultVerified, user: publicUser(user) });
+  } catch (err) {
+    console.error('[k-ID Server] Adult verification check failed:', err);
+    res.status(500).json({ error: 'Could not confirm adult verification.' });
+  }
+});
+
+// 7. Families
+app.post('/api/families', requireAuth, (req, res) => {
+  const { user } = req;
+  const name = String(req.body?.name || '').trim();
+
+  if (getFamilyForUser(user.id)) {
+    return res.status(409).json({ error: 'You are already in a family.' });
+  }
+  if (!user.adultVerified) {
+    return res.status(403).json({ error: 'Only k-ID verified adults can create a family.', code: 'ADULT_VERIFICATION_REQUIRED' });
+  }
+  if (!user.email) {
+    return res.status(400).json({ error: 'Family admins need an email address so k-ID consent requests can reach them.' });
+  }
+  if (!name || name.length > 50) {
+    return res.status(400).json({ error: 'Please enter a family name (up to 50 characters).' });
+  }
+
+  const now = new Date().toISOString();
+  const family = {
+    id: randomUUID(),
+    name,
+    createdAt: now,
+    members: { [user.id]: { role: 'admin', invitedBy: null, joinedAt: now } }
+  };
+  db.families[family.id] = family;
+  persist();
+
+  res.status(201).json({ family: publicFamily(family) });
+});
+
+app.post('/api/families/invites', requireAuth, (req, res) => {
+  const family = getFamilyForUser(req.user.id);
+  if (!isFamilyAdmin(family, req.user.id)) {
+    return res.status(403).json({ error: 'Only family admins can invite people.' });
+  }
+  if (!req.user.email) {
+    return res.status(400).json({ error: 'Add an email to your account before inviting, so consent requests can reach you.' });
+  }
+
+  const token = randomToken();
+  const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString();
+  db.invites[token] = { familyId: family.id, invitedBy: req.user.id, expiresAt };
+  persist();
+
+  res.status(201).json({ token, expiresAt });
+});
+
+app.get('/api/invites/:token', (req, res) => {
+  const invite = getValidInvite(req.params.token);
+  if (!invite) {
+    return res.status(404).json({ error: 'This invite link is invalid or has expired.' });
+  }
+  res.json({
+    familyName: db.families[invite.familyId].name,
+    invitedByName: getUser(invite.invitedBy)?.displayName || 'A family admin'
+  });
+});
+
+app.post('/api/invites/:token/accept', requireAuth, (req, res) => {
+  const invite = getValidInvite(req.params.token);
+  if (!invite) {
+    return res.status(404).json({ error: 'This invite link is invalid or has expired.' });
+  }
+
+  const currentFamily = getFamilyForUser(req.user.id);
+  if (currentFamily) {
+    return res.status(409).json({ error: `You are already in ${currentFamily.name}. Leave it first to join another family.` });
+  }
+
+  const family = db.families[invite.familyId];
+  db.families[family.id] = {
+    ...family,
+    members: {
+      ...family.members,
+      [req.user.id]: { role: 'member', invitedBy: invite.invitedBy, joinedAt: new Date().toISOString() }
+    }
+  };
+  delete db.invites[req.params.token];
+  saveUser(req.user, { invitedBy: invite.invitedBy });
+
+  res.json({ family: publicFamily(db.families[family.id]) });
+});
+
+app.patch('/api/families/members/:userId', requireAuth, (req, res) => {
+  const family = getFamilyForUser(req.user.id);
+  const targetId = req.params.userId;
+  const { role } = req.body || {};
+
+  if (!isFamilyAdmin(family, req.user.id)) {
+    return res.status(403).json({ error: 'Only family admins can change roles.' });
+  }
+  if (!family.members[targetId]) {
+    return res.status(404).json({ error: 'That person is not in your family.' });
+  }
+  if (!['admin', 'member'].includes(role)) {
+    return res.status(400).json({ error: 'role must be "admin" or "member"' });
+  }
+  if (role === 'admin' && !getUser(targetId)?.adultVerified) {
+    return res.status(400).json({ error: 'Only k-ID verified adults can be family admins.' });
+  }
+  if (role === 'member' && family.members[targetId].role === 'admin' && adminCount(family) === 1) {
+    return res.status(400).json({ error: 'A family needs at least one admin. Make someone else admin first.' });
+  }
+
+  db.families[family.id] = {
+    ...family,
+    members: { ...family.members, [targetId]: { ...family.members[targetId], role } }
+  };
+  persist();
+
+  res.json({ family: publicFamily(db.families[family.id]) });
+});
+
+// Admins can remove anyone; anyone can remove themselves (leave)
+app.delete('/api/families/members/:userId', requireAuth, (req, res) => {
+  const family = getFamilyForUser(req.user.id);
+  const targetId = req.params.userId;
+
+  if (!family || !family.members[targetId]) {
+    return res.status(404).json({ error: 'That person is not in your family.' });
+  }
+  if (targetId !== req.user.id && !isFamilyAdmin(family, req.user.id)) {
+    return res.status(403).json({ error: 'Only family admins can remove people.' });
+  }
+
+  const remaining = { ...family.members };
+  delete remaining[targetId];
+
+  if (Object.keys(remaining).length === 0) {
+    // Last one out: drop the family and its pending invites
+    delete db.families[family.id];
+    for (const [token, invite] of Object.entries(db.invites)) {
+      if (invite.familyId === family.id) delete db.invites[token];
+    }
+    persist();
+    return res.json({ family: null });
+  }
+
+  if (family.members[targetId].role === 'admin' && adminCount(family) === 1) {
+    return res.status(400).json({ error: 'A family needs at least one admin. Make someone else admin first.' });
+  }
+
+  db.families[family.id] = { ...family, members: remaining };
+  persist();
+
+  res.json({ family: targetId === req.user.id ? null : publicFamily(db.families[family.id]) });
+});
+
 // 2. k-ID widget URL generation endpoint (Modular Placeholder Slot)
 app.post('/widget/generate-e2e-url', async (req, res) => {
   try {
@@ -404,49 +802,28 @@ app.post('/api/ask', async (req, res) => {
     }
 
     // k-ID Server-side lock enforcement:
-    // Unlock nothing on the server until the claim succeeds
-    const secretKey = process.env.KID_SECRET_KEY;
-    if (secretKey && !mockBypass && !sessionId?.startsWith('demo_')) {
-      let isUnlocked = false;
-
-      if (sessionId && playerAccounts.records.has(sessionId)) {
-        const record = playerAccounts.records.get(sessionId);
-        if (record.unlocked) {
-          isUnlocked = true;
-        }
+    // Unlock nothing on the server until the logged-in user's own k-ID session checks out,
+    // and take the age mode from that session rather than from the request body
+    let resolvedAgeMode = ageMode;
+    if (!mockBypass && !sessionId?.startsWith('demo_')) {
+      const user = userFromRequest(req);
+      if (!user) {
+        return res.status(401).json({ error: 'Please log in to continue.' });
       }
 
-      // If not yet cached, query k-ID session endpoint
-      if (!isUnlocked && sessionId) {
-        try {
-          const verifyRes = await fetch(
-            `https://kai-api.test.k-id.com/api/v1/session/get?sessionId=${encodeURIComponent(sessionId)}`,
-            {
-              method: 'GET',
-              headers: {
-                'Authorization': `Bearer ${secretKey}`
-              }
-            }
-          );
-
-          if (verifyRes.ok) {
-            isUnlocked = true;
-            playerAccounts.records.set(sessionId, { unlocked: true, updatedAt: Date.now() });
-          }
-        } catch (err) {
-          console.warn('[k-ID Server] Verification lookup error:', err.message);
+      if (process.env.KID_SECRET_KEY) {
+        const sessionMode = await resolveAgeMode(user);
+        if (!sessionMode) {
+          return res.status(403).json({
+            error: 'Access locked: This action requires a verified k-ID session with a completed server claim.',
+            status: 'LOCKED'
+          });
         }
-      }
-
-      if (!isUnlocked) {
-        return res.status(403).json({
-          error: 'Access locked: This action requires a verified k-ID session with a completed server claim.',
-          status: 'LOCKED'
-        });
+        resolvedAgeMode = sessionMode;
       }
     }
 
-    const validAgeMode = ['kid', 'teen', 'adult'].includes(ageMode) ? ageMode : 'adult';
+    const validAgeMode = ['kid', 'teen', 'adult'].includes(resolvedAgeMode) ? resolvedAgeMode : 'adult';
     const systemPrompt = SYSTEM_PROMPTS[validAgeMode];
 
     // Discover dynamic Flash models list

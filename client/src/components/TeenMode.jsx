@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ChefHat, Flame, ShieldAlert, Send, Sparkles, AlertTriangle, LogOut, Clock, Check, Shield } from 'lucide-react';
 import { KidPermission } from '@k-id/core';
+import { authHeaders } from '../auth';
 
 export default function TeenMode({ onSignOut, sessionId, onOpenSettings }) {
   const [messages, setMessages] = useState([
@@ -30,7 +31,7 @@ export default function TeenMode({ onSignOut, sessionId, onOpenSettings }) {
     try {
       const res = await fetch('/api/ask', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ message: userMsg, ageMode: 'teen', sessionId })
       });
 
