@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>k-ID Age Verification Widget (Sandbox)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 28px 24px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(99, 102, 241, 0.15);
+      color: #818cf8;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      letter-spacing: 0.5px;
+    }
+    h2 {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #ffffff;
+    }
+    p {
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.5;
+      margin-bottom: 24px;
+    }
+    .options {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    .option-btn {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+      padding: 12px 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      text-align: left;
+    }
+    .option-btn:hover {
+      border-color: #6366f1;
+      background: #1e1b4b;
+      transform: translateY(-1px);
+    }
+    .option-btn.selected {
+      border-color: #818cf8;
+      background: rgba(99, 102, 241, 0.25);
+    }
+    .opt-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .opt-icon { font-size: 20px; }
+    .opt-title { font-weight: 600; }
+    .opt-sub { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .verify-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      color: #ffffff;
+      border: none;
+      padding: 14px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .verify-btn:hover { opacity: 0.9; }
+    .footer-text {
+      margin-top: 18px;
+      font-size: 11px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="badge">
+      <span>🛡️</span>
+      <span>k-ID AGE VERIFICATION</span>
+    </div>
+    <h2>Verify Age to Enter</h2>
+    <p>Household safety and permissions will adapt to your age bracket.</p>
+
+    <div class="options">
+      <button type="button" class="option-btn selected" onclick="selectAge('kid', this)">
+        <div class="opt-left">
+          <span class="opt-icon">🧒</span>
+          <div>
+            <div class="opt-title">Under 13 (Child)</div>
+            <div class="opt-sub">Safe chore checklists, life skills, no open AI chat</div>
+          </div>
+        </div>
+        <span>✓</span>
+      </button>
+
+      <button type="button" class="option-btn" onclick="selectAge('teen', this)">
+        <div class="opt-left">
+          <span class="opt-icon">🧑</span>
+          <div>
+            <div class="opt-title">13 – 17 (Teenager)</div>
+            <div class="opt-sub">Cooking assistant with strict kitchen safety guardrails</div>
+          </div>
+        </div>
+        <span></span>
+      </button>
+
+      <button type="button" class="option-btn" onclick="selectAge('adult', this)">
+        <div class="opt-left">
+          <span class="opt-icon">👤</span>
+          <div>
+            <div class="opt-title">18+ (Adult / Parent)</div>
+            <div class="opt-sub">Full household manager, recipes & open Gemini chat</div>
+          </div>
+        </div>
+        <span></span>
+      </button>
+    </div>
+
+    <button type="button" class="verify-btn" onclick="completeVerification()">
+      Verify & Enter Household
+    </button>
+
+    <div class="footer-text">
+      🔒 Powered by k-ID Sandbox • Compliant Age Gate
+    </div>
+  </div>
+
+  <script>
+    let currentAge = 'kid';
+
+    function selectAge(age, element) {
+      currentAge = age;
+      document.querySelectorAll('.option-btn').forEach(btn => {
+        btn.classList.remove('selected');
+        btn.querySelector('span:last-child').textContent = '';
+      });
+      element.classList.add('selected');
+      element.querySelector('span:last-child').textContent = '✓';
+    }
+
+    function completeVerification() {
+      const sessionId = 'kid_sess_' + Math.random().toString(36).substring(2, 10);
+      
+      // Dispatch the exact k-ID postMessage event specified in requirements
+      const messagePayload = {
+        type: 'Widget.AgeGate.Result',
+        event: 'Widget.AgeGate.Result',
+        status: 'PASS',
+        sessionId: sessionId,
+        ageBracket: currentAge,
+        ageMode: currentAge,
+        timestamp: Date.now()
+      };
+
+      console.log('[k-ID Widget] Emitting postMessage:', messagePayload);
+      
+      // Send to parent window
+      window.parent.postMessage(messagePayload, '*');
+    }
+  </script>
+</body>
+</html>
