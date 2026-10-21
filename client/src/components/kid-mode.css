@@ -192,6 +192,100 @@
   border-radius: 20px;
 }
 .household-guide-empty { color: #43506e; font-size: 15px; line-height: 1.5; }
+.household-guide-pending { gap: 8px; color: #5f4b85; font-size: 15px; font-weight: 700; }
+.household-guide-pending span { font-size: 56px; }
+.household-guide-failed { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.household-guide-failed button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  color: #5f4b85;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  background: #fff;
+  border: 1px solid #ded3f4;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.household-guide-note {
+  padding: 10px 14px;
+  color: #43506e;
+  font-size: 14px;
+  line-height: 1.5;
+  background: #fffbea;
+  border: 1px solid #fde68a;
+  border-radius: 14px;
+}
+.household-guide-note.is-safety { background: #fff1f0; border-color: #fecaca; }
+.household-task-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: rgba(255,255,255,.82);
+  border: 1px solid #e8def6;
+  border-radius: 16px;
+}
+.household-task-chat h3 { color: #34235d; font-size: 15px; font-weight: 800; }
+.household-task-chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.household-task-chat-bubble {
+  max-width: 88%;
+  padding: 9px 12px;
+  color: #43506e;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+}
+.household-task-chat-bubble.is-user { align-self: flex-end; background: #efe7ff; }
+.household-task-chat-bubble.is-assistant { align-self: flex-start; background: #fff; border: 1px solid #e8def6; }
+.household-task-chat-thinking { color: #8960c8; font-size: 12px; }
+.household-task-chat-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.household-task-chat-chips button {
+  padding: 7px 12px;
+  color: #5f4b85;
+  font: inherit;
+  font-size: 13px;
+  background: #fff;
+  border: 1px solid #ded3f4;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+.household-task-chat-form { display: flex; gap: 8px; }
+/* 16px text keeps iOS Safari from zooming in when the field is focused */
+.household-task-chat-form input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  color: #34235d;
+  font: inherit;
+  font-size: 16px;
+  background: #fff;
+  border: 1px solid #ded3f4;
+  border-radius: 12px;
+}
+.household-task-chat-form button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  min-height: 44px;
+  color: #0b1120;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.household-task-chat-form button:disabled,
+.household-task-chat-chips button:disabled { opacity: .5; cursor: default; }
 
 /* Keep the shared household app cheerful and high-contrast for younger kids. */
 .household-app-kid {

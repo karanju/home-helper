@@ -63,7 +63,7 @@ function GateFrame({ children }) {
 }
 
 // Inner component rendered once the player passes the k-ID age gate
-function VerifiedApp({ sessionId, forcedMode, serverAgeMode, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
+function VerifiedApp({ sessionId, forcedMode, serverAgeMode, familyId, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
   const { session, ageVerification } = useKidSession();
 
   useEffect(() => {
@@ -111,6 +111,7 @@ function VerifiedApp({ sessionId, forcedMode, serverAgeMode, familyName, onSignO
       key={resolvedMode}
       ageMode={resolvedMode}
       sessionId={sessionId}
+      familyId={familyId}
       familyName={familyName}
       onSignOut={onSignOut}
       onOpenSettings={onOpenSettings}
@@ -384,6 +385,7 @@ export default function App() {
                     sessionId={sessionId}
                     forcedMode={forcedAgeMode}
                     serverAgeMode={me.ageMode}
+                    familyId={me.family?.id}
                     familyName={me.family?.name}
                     onSignOut={handleSignOut}
                     onOpenSettings={() => setIsSettingsOpen(true)}

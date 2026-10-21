@@ -63,11 +63,12 @@ export const AGE_CONFIG = {
     canAssignOthers: true,
     reward: null,
     helperName: 'Home Assistant',
-    helperIntro: 'I can explain any chore in detail, plan meals and groceries, or suggest a fair, age-appropriate way to split chores across the family.',
+    helperIntro: 'I can explain any chore in detail, plan meals and groceries, or suggest a fair, age-appropriate way to split chores across the family. Ask me to add chores and I\'ll put them on the board once you confirm.',
     helperFreeText: true,
     helperPrompts: [
       'Plan 3 family dinners and a grocery list',
       'Suggest age-appropriate chores for a 9 and 15 year old',
+      'Add laundry for the teen and toy cleanup for the kid',
       'A 45-minute weekend whole-house clean routine'
     ],
     safetyNote: null
