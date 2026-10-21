@@ -322,3 +322,6 @@
 .household-app-kid .household-chore-row.is-done { background: #e4fff2 !important; border-color: #7bddad !important; }
 .household-app-kid .household-chore-row > button:not(.household-chore-title) { border-color: #e2d8f2 !important; color: #6741d9 !important; }
 .household-app-kid .household-chore-meta { color: #64708b !important; }
+
+@keyframes voice-spin { to { transform: rotate(360deg); } }
+.voice-spinner { animation: voice-spin 0.9s linear infinite; }

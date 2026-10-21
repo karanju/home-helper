@@ -1,5 +1,5 @@
 # Multi-stage or single lean build for Google Cloud Run
-FROM node:22-alpine
+FROM node:22-slim
 
 WORKDIR /app
 

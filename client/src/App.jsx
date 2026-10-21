@@ -20,7 +20,7 @@ import { apiFetch, authHeaders, initAuth, onAuthChange, signOutUser } from './au
 import { Shield, Clock, AlertTriangle, XCircle } from 'lucide-react';
 
 const K_ID_CONFIG = {
-  publishableKey: 'kgp_test_ckcqom36ppaaaeytysmy4puoznneommzdbrfljfiheuwewt4aiulgxeqf3q77xy',
+  publishableKey: import.meta.env.VITE_KID_PUBLISHABLE_KEY || 'kgp_test_ckcqom36ppaaaeytysmy4puoznneommzdbrfljfiheuwewt4aiulgxeqf3q77xy',
   baseUrl: 'https://kai-api.test.k-id.com/fapi/v1',
   declare: {
     permissions: [

@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import dns from 'node:dns/promises';
 import { callGemini, candidateText, GeminiUnavailableError } from './ai/gemini.js';
 import { AGE_MODES, SYSTEM_PROMPTS, chatGenerationConfig } from './ai/prompts.js';
 import { InputError } from './ai/validate.js';
@@ -72,7 +73,11 @@ async function fetchKidSession(sessionId) {
     }
   );
   const data = await sessionRes.json().catch(() => ({}));
-  return { ok: sessionRes.ok, status: sessionRes.status, session: data.session ?? data };
+  const rawErrorCode = data?.error ?? data?.code ?? data?.status;
+  const errorCode = typeof rawErrorCode === 'string' && /^[A-Z0-9_-]{1,64}$/i.test(rawErrorCode)
+    ? rawErrorCode
+    : undefined;
+  return { ok: sessionRes.ok, status: sessionRes.status, errorCode, session: data.session ?? data };
 }
 
 // Map a k-ID session to an age mode. A proven age wins; otherwise the age status decides.
@@ -169,8 +174,29 @@ app.get('/health', (req, res) => {
     service: 'home-helper',
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
     hasKidSecretKey: Boolean(process.env.KID_SECRET_KEY),
+    hasModulateKey: Boolean(process.env.MODULATE_API_KEY),
     hasFirebase: isFirebaseConfigured
   });
+});
+
+// Temporary, fixed-host DNS diagnostic. Enable only while investigating outbound DNS.
+app.get('/debug/modulate-dns', async (req, res) => {
+  if (process.env.ENABLE_NETWORK_DIAGNOSTICS !== 'true') {
+    return res.status(404).json({ error: 'Not found.' });
+  }
+
+  const results = {};
+  for (const hostname of ['google.com', 'platform.modulate.ai']) {
+    try {
+      const addresses = await dns.lookup(hostname, { all: true });
+      results[hostname] = {
+        addresses: addresses.map(({ address, family }) => ({ address, family }))
+      };
+    } catch (error) {
+      results[hostname] = { error: error?.code || 'DNS_LOOKUP_FAILED' };
+    }
+  }
+  res.json(results);
 });
 
 // 2. k-ID Server Claim Endpoint
@@ -824,6 +850,151 @@ function sendAiError(res, err, label) {
   console.error(`Error in ${label}:`, err);
   res.status(500).json({ error: 'Internal server error processing request', details: err.message });
 }
+
+// Transcribe a short voice message for the household helper. Audio is held in memory only.
+app.post(
+  '/api/transcribe-audio',
+  express.raw({ type: ['audio/*', 'application/octet-stream'], limit: '50mb' }),
+  async (req, res) => {
+    try {
+      const requestedAgeMode = req.get('X-Age-Mode');
+      const sessionId = req.get('X-Session-ID') || '';
+      const contentType = req.get('Content-Type') || '';
+      const audio = req.body;
+
+      if (!contentType.toLowerCase().startsWith('audio/') && contentType !== 'application/octet-stream') {
+        return res.status(415).json({ error: 'Upload a supported audio recording.' });
+      }
+      if (!Buffer.isBuffer(audio) || audio.length === 0) {
+        return res.status(400).json({ error: 'A non-empty audio recording is required.' });
+      }
+      if (!AGE_MODES.includes(requestedAgeMode)) {
+        return res.status(403).json({ error: 'Voice input is unavailable in this age mode.' });
+      }
+
+      const isLocalDemo = sessionId.startsWith('demo_') && process.env.NODE_ENV !== 'production';
+      let verifiedMode = requestedAgeMode;
+      if (isLocalDemo && requestedAgeMode === 'kid') {
+        return res.status(403).json({ error: 'Kid voice input requires a real k-ID session with AI chat and voice permissions.' });
+      }
+      if (!isLocalDemo) {
+        if (!process.env.KID_SECRET_KEY) {
+          return res.status(503).json({ error: 'Voice input verification is not configured on the server.' });
+        }
+        const user = await userFromRequest(req);
+        if (!user) return res.status(401).json({ error: 'Please sign in to use voice input.' });
+        if (!sessionId || user.kidSessionId !== sessionId) {
+          return res.status(403).json({ error: 'Voice input must use your own verified k-ID session.' });
+        }
+
+        const profile = await resolveKidProfile(user);
+        if (!profile) {
+          return res.status(403).json({ error: 'Voice input requires a verified k-ID session.' });
+        }
+        if (profile.mode !== requestedAgeMode) {
+          return res.status(403).json({ error: 'Voice input age mode does not match your verified k-ID session.' });
+        }
+        verifiedMode = profile.mode;
+        const canUsePermission = (name) => profile.mode === 'adult' || profile.permissions[name] === true;
+        if (!canUsePermission('ai-chat') || !canUsePermission('ai-voice-mode')) {
+          return res.status(403).json({ error: 'k-ID must grant both AI chat and AI voice permissions for voice input.' });
+        }
+      }
+
+      const modulateApiKey = process.env.MODULATE_API_KEY;
+      if (!modulateApiKey) {
+        return res.status(503).json({ error: 'MODULATE_API_KEY is not configured on the server.' });
+      }
+
+      const subtype = contentType.split(';')[0].split('/')[1] || 'webm';
+      const extension = subtype === 'x-m4a' ? 'm4a' : subtype;
+      const modulateUrl = new URL('https://platform.modulate.ai/api/velma-2-stt-batch');
+      let modulateRes;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const attemptNumber = attempt + 1;
+        const attemptStartedAt = Date.now();
+        const form = new FormData();
+        form.append('upload_file', new Blob([audio], { type: contentType }), `voice-message.${extension}`);
+        console.info('[Modulate] Transcription request started:', JSON.stringify({
+          host: modulateUrl.hostname,
+          attempt: attemptNumber,
+          ageMode: verifiedMode,
+          contentType: contentType.split(';')[0],
+          audioBytes: audio.length
+        }));
+        try {
+          modulateRes = await fetch(modulateUrl, {
+            method: 'POST',
+            headers: { 'X-API-Key': modulateApiKey },
+            body: form
+          });
+          console.info('[Modulate] Transcription response received:', JSON.stringify({
+            host: modulateUrl.hostname,
+            attempt: attemptNumber,
+            status: modulateRes.status,
+            durationMs: Date.now() - attemptStartedAt
+          }));
+          break;
+        } catch (error) {
+          const causeCode = error?.cause?.code;
+          console.warn('[Modulate] Transcription network attempt failed:', JSON.stringify({
+            host: modulateUrl.hostname,
+            attempt: attemptNumber,
+            durationMs: Date.now() - attemptStartedAt,
+            errorName: error?.name || 'Error',
+            causeName: error?.cause?.name || undefined,
+            causeCode: causeCode || undefined,
+            causeSyscall: error?.cause?.syscall || undefined,
+            causeHostname: error?.cause?.hostname || undefined
+          }));
+          if (causeCode !== 'EAI_AGAIN' || attempt === 2) throw error;
+          const retryDelayMs = 300 * attemptNumber;
+          console.info('[Modulate] Retrying transient DNS failure:', JSON.stringify({
+            nextAttempt: attemptNumber + 1,
+            retryDelayMs
+          }));
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        }
+      }
+
+      const result = await modulateRes.json().catch(() => ({}));
+      if (!modulateRes.ok) {
+        const rawErrorCode = result?.code ?? result?.error_code;
+        const errorCode = typeof rawErrorCode === 'string' && /^[A-Z0-9_-]{1,64}$/i.test(rawErrorCode)
+          ? rawErrorCode
+          : undefined;
+        console.warn('[Modulate] Transcription rejected:', JSON.stringify({
+          host: modulateUrl.hostname,
+          status: modulateRes.status,
+          errorCode: errorCode || 'UNSPECIFIED'
+        }));
+        return res.status(502).json({ error: 'Modulate could not transcribe this recording.' });
+      }
+
+      const transcript = Array.isArray(result.utterances)
+        ? result.utterances.map(utterance => utterance?.text).filter(Boolean).join(' ').trim()
+        : String(result.transcript || result.text || '').trim();
+      if (!transcript) return res.status(422).json({ error: 'No speech was recognized. Try recording again.' });
+      return res.json({ transcript });
+    } catch (error) {
+      if (error.type === 'entity.too.large') {
+        return res.status(413).json({ error: 'Recording is too large. Keep it under 50 MB.' });
+      }
+      const causeCode = error?.cause?.code;
+      console.error('[Modulate] Audio transcription request failed:', JSON.stringify({
+        errorName: error?.name || 'Error',
+        causeName: error?.cause?.name || undefined,
+        causeCode: causeCode || undefined,
+        causeSyscall: error?.cause?.syscall || undefined,
+        causeHostname: error?.cause?.hostname || undefined
+      }));
+      if (causeCode === 'EAI_AGAIN') {
+        return res.status(503).json({ error: 'The transcription service is temporarily unreachable. Please try again.' });
+      }
+      return res.status(500).json({ error: 'Could not process the audio recording.' });
+    }
+  }
+);
 
 // 3. Gemini API ask endpoint (gated by k-ID server-side claim verification)
 app.post('/api/ask', async (req, res) => {

@@ -71,9 +71,14 @@ If sandbox credentials or Wi-Fi are flaky during the live stage pitch:
    - `http://localhost:8080/?mock-age=kid`
    - `http://localhost:8080/?mock-age=teen`
    - `http://localhost:8080/?mock-age=adult`
-2. **On-Screen Demo Switcher**: A floating bar at the bottom allows 1-click mode switching and re-locking during live presentations.
 
 ---
+
+## 🎙️ Modulate Voice Input
+
+Teen and adult helper chat can accept a short voice message when the k-ID `ai-voice-mode` permission is enabled. Kid mode exposes voice input only when that child's k-ID session grants both `ai-chat` and `ai-voice-mode`. The backend checks the signed-in user's session, verified age mode, and permissions before forwarding a recording to Modulate. Recognized text is placed in the chat composer for review before it is sent. Home Helper keeps recordings in memory only and does not save them to disk. The `/health` response includes `hasModulateKey` so you can confirm the server loaded the setting without exposing its value.
+
+Set `MODULATE_API_KEY` in the root `.env` for local development (see `.env.example`) or in the server's deployment environment. Keep this key server-side; the browser never receives it. The microphone requires a secure context such as `localhost` or HTTPS.
 
 ## ☁️ Google Cloud Run Deployment
 
@@ -95,7 +100,7 @@ gcloud run deploy home-helper \
   --source . \
   --region us-west1 \
   --allow-unauthenticated \
-  --set-env-vars GEMINI_API_KEY="YOUR_GEMINI_API_KEY",KID_SECRET_KEY="YOUR_KID_SECRET_KEY",FIREBASE_API_KEY="...",FIREBASE_AUTH_DOMAIN="k-id-hackathon.firebaseapp.com",FIREBASE_PROJECT_ID="k-id-hackathon",FIREBASE_APP_ID="..."
+  --set-env-vars GEMINI_API_KEY="YOUR_GEMINI_API_KEY",KID_SECRET_KEY="YOUR_KID_SECRET_KEY",FIREBASE_API_KEY="...",FIREBASE_AUTH_DOMAIN="k-id-hackathon.firebaseapp.com",FIREBASE_PROJECT_ID="k-id-hackathon",FIREBASE_APP_ID="...",MODULATE_API_KEY="YOUR_MODULATE_API_KEY"
 ```
 
 Do **not** set `GOOGLE_APPLICATION_CREDENTIALS` on Cloud Run. The `FIREBASE_*` values are the public web-app config from **Project settings → Your apps**.

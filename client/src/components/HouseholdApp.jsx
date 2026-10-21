@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Circle, HelpCircle, ListChecks, LogOut, Plus, RotateCcw, Send, Shield, ShieldAlert, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { CheckCircle2, Circle, HelpCircle, ListChecks, LoaderCircle, LockKeyhole, LogOut, Mic, Plus, RotateCcw, Send, Shield, ShieldAlert, Sparkles, Square, Trash2, Users, X } from 'lucide-react';
 import { useFeature } from './FeatureGate';
 import { apiFetch, authHeaders } from '../auth';
 import { AGE_CONFIG, MEMBERS, SEED_CHORES } from '../household';
@@ -54,6 +54,9 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
   // Kids only see AI picture guides with AI Media Generation on; teens and adults always do
   const canMakePictures = useFeature('ai-media-generation');
   const showAiPictures = ageMode !== 'kid' || canMakePictures;
+  const canUseVoice = useFeature('ai-voice-mode');
+  const canUseKidVoice = ageMode === 'kid' && !sessionId?.startsWith('demo_') && canUseAi && canUseVoice;
+  const canUseFreeText = config.helperFreeText || canUseKidVoice;
   const isMobile = useIsMobile();
 
   // In a family, chores are shared and assigned to real people; otherwise they're local, assigned to age groups
@@ -75,7 +78,15 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
   const [messages, setMessages] = useState([{ role: 'assistant', text: config.helperIntro }]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
   const messagesRef = useRef(null);
+  const recorderRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const mediaStreamRef = useRef(null);
+  const recordingTimeoutRef = useRef(null);
+  const recordingCancelledRef = useRef(false);
 
   // Task chat inside the drawer: one short conversation per chore
   const [taskChats, setTaskChats] = useState({});
@@ -88,6 +99,13 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
   const [helperUnread, setHelperUnread] = useState(false);
   const mobileTabRef = useRef(mobileTab);
   mobileTabRef.current = mobileTab;
+
+  useEffect(() => () => {
+    recordingCancelledRef.current = true;
+    window.clearTimeout(recordingTimeoutRef.current);
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+    mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+  }, []);
 
   useEffect(() => {
     if (!selectedChoreId) return undefined;
@@ -216,6 +234,85 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
     setIsAddOpen(false);
     // Make sure the new chore is visible under the current filter
     if (memberFilter !== 'all' && memberFilter !== assigneeId) setMemberFilter('all');
+  };
+
+  const stopRecording = () => {
+    window.clearTimeout(recordingTimeoutRef.current);
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
+  };
+
+  const startRecording = async () => {
+    setVoiceError('');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceError('Voice recording is not supported by this browser.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      recordingChunksRef.current = [];
+      recordingCancelledRef.current = false;
+      const supportedTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+      const mimeType = typeof MediaRecorder.isTypeSupported === 'function'
+        ? supportedTypes.find(type => MediaRecorder.isTypeSupported(type))
+        : undefined;
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = event => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        setVoiceError('The recording stopped unexpectedly. Please try again.');
+        window.clearTimeout(recordingTimeoutRef.current);
+        stream.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+        setIsRecording(false);
+      };
+      recorder.onstop = async () => {
+        window.clearTimeout(recordingTimeoutRef.current);
+        stream.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+        setIsRecording(false);
+        const audio = new Blob(recordingChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        recordingChunksRef.current = [];
+        if (recordingCancelledRef.current) return;
+        if (!audio.size) {
+          setVoiceError('No audio was recorded. Please try again.');
+          return;
+        }
+
+        setIsTranscribing(true);
+        try {
+          const response = await fetch('/api/transcribe-audio', {
+            method: 'POST',
+            headers: {
+              ...(await authHeaders()),
+              'Content-Type': audio.type || 'audio/webm',
+              'X-Age-Mode': ageMode,
+              'X-Session-ID': sessionId || ''
+            },
+            body: audio
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(result.error || 'Transcription failed.');
+          setInput(current => [current.trim(), result.transcript].filter(Boolean).join(' '));
+        } catch (error) {
+          setVoiceError(error.message || 'Could not transcribe the recording.');
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+      recorder.start();
+      recordingTimeoutRef.current = window.setTimeout(() => {
+        if (recorder.state === 'recording') recorder.stop();
+      }, 60_000);
+      setIsRecording(true);
+    } catch (error) {
+      setVoiceError(error.name === 'NotAllowedError'
+        ? 'Allow microphone access in your browser, then try again.'
+        : 'Could not start the microphone. Please try again.');
+    }
   };
 
   const askHelper = async (text) => {
@@ -534,7 +631,8 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                   ))}
                 </div>
 
-                {config.helperFreeText && (
+                {canUseFreeText && (
+                  <>
                   <form onSubmit={(e) => { e.preventDefault(); askHelper(); }} style={styles.addForm}>
                     <input
                       value={input}
@@ -545,10 +643,27 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                       disabled={loading}
                       enterKeyHint="send"
                     />
-                    <button type="submit" style={accentButton} disabled={loading || !input.trim()} aria-label="Ask">
+                    {(ageMode === 'kid' ? canUseKidVoice : true) && (
+                      <button
+                        type="button"
+                        onClick={canUseVoice ? (isRecording ? stopRecording : startRecording) : onOpenSettings}
+                        style={{ ...styles.voiceBtn, borderColor: isRecording ? '#ef4444' : config.accent, color: isRecording ? '#ef4444' : config.accent, opacity: canUseVoice ? 1 : 0.78 }}
+                        disabled={isTranscribing || loading}
+                        aria-label={!canUseVoice ? 'Enable voice input in Permissions' : isRecording ? 'Stop recording' : isTranscribing ? 'Transcribing voice message' : 'Record voice message'}
+                        title={!canUseVoice ? 'Enable voice input in Permissions' : isRecording ? 'Stop recording' : 'Speak a message'}
+                      >
+                        {isTranscribing ? <LoaderCircle size={18} className="voice-spinner" /> : !canUseVoice ? <LockKeyhole size={17} /> : isRecording ? <Square size={16} fill="currentColor" /> : <Mic size={18} />}
+                        {!isMobile && (!canUseVoice ? 'Enable voice' : isRecording ? 'Stop' : isTranscribing ? 'Transcribing…' : 'Speak')}
+                      </button>
+                    )}
+                    <button type="submit" style={accentButton} disabled={loading || !input.trim() || isRecording || isTranscribing} aria-label="Ask">
                       <Send size={16} /> {!isMobile && 'Ask'}
                     </button>
                   </form>
+                  {voiceError && <p role="alert" style={styles.voiceError}>{voiceError}</p>}
+                  {isRecording && <p aria-live="polite" style={styles.voiceStatus}>Recording… tap Stop when you are done (up to 60 seconds).</p>}
+                  {isTranscribing && <p aria-live="polite" style={styles.voiceStatus}>Transcribing your recording…</p>}
+                  </>
                 )}
               </>
             ) : (
@@ -569,6 +684,11 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                     <p style={{ ...styles.muted, maxWidth: 320 }}>
                       AI help is turned off for this account. Tap "How?" on a chore for simple steps, or ask a grown-up to turn it on in Permissions.
                     </p>
+                    {ageMode !== 'kid' && onOpenSettings && (
+                      <button type="button" onClick={onOpenSettings} style={styles.voiceBtn}>
+                        <Mic size={17} /> Enable AI chat and voice in Permissions
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -1133,6 +1253,34 @@ const styles = {
     border: '1px solid #334155',
     color: '#f8fafc',
     padding: '10px 12px',
+    borderRadius: '10px',
+    fontSize: '16px',
+    fontFamily: 'inherit',
+  },
+  voiceBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
+    minHeight: '44px',
+    minWidth: '44px',
+    padding: '8px 10px',
+    border: '1px solid',
+    borderRadius: '10px',
+    backgroundColor: '#0f172a',
+    fontSize: '13px',
+    fontWeight: '700',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  voiceError: { color: '#fca5a5', fontSize: '12px', lineHeight: 1.4 },
+  voiceStatus: { color: '#94a3b8', fontSize: '12px', lineHeight: 1.4 },
+  select: {
+    minHeight: '44px',
+    backgroundColor: '#0f172a',
+    border: '1px solid #334155',
+    color: '#f8fafc',
+    padding: '0 8px',
     borderRadius: '10px',
     fontSize: '16px',
     fontFamily: 'inherit',
