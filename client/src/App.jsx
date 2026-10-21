@@ -17,7 +17,7 @@ import SettingsModal from './components/SettingsModal';
 import { Shield, Sparkles, Clock, AlertTriangle, XCircle, Sliders } from 'lucide-react';
 
 const K_ID_CONFIG = {
-  publishableKey: 'kgp_test_gdx5ffioppaaaeysyjxri3esr7ckgmkpgjy3pgsf3m5swco7op5u55oa5r4u3ji',
+  publishableKey: 'kgp_test_ckcqom36ppaaaeytysmy4puoznneommzdbrfljfiheuwewt4aiulgxeqf3q77xy',
   baseUrl: 'https://kai-api.test.k-id.com/fapi/v1',
   declare: {
     permissions: [
