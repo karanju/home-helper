@@ -76,7 +76,7 @@ function BrandBar({ children }) {
     <header className="gate-bar">
       <div className="brand">
         <span className="brand-mark"><House size={16} strokeWidth={2.25} /></span>
-        <span className="brand-name">Home Helper</span>
+        <span className="brand-name">Homebase</span>
       </div>
       {children}
     </header>
@@ -132,7 +132,7 @@ function VerifiedApp({ sessionId, forcedMode, serverAgeMode, family, myUserId, f
     }
   }
 
-  console.info('[Home Helper] Age-mode routing', {
+  console.info('[Homebase] Age-mode routing', {
     verifiedAge: ageVerification?.verifiedAge ?? null,
     ageStatus: session?.ageStatus ?? null,
     resolvedMode,
@@ -379,7 +379,7 @@ export default function App() {
                 {/* 1. Pending slot: Waiting on parent email consent */}
                 <KidAgeGatePending>
                   <SlotCard icon={Clock} tone="waiting" title="Waiting for a grown-up">
-                    We sent an approval link to your parent or guardian. Home Helper unlocks as soon as they approve.
+                    We sent an approval link to your parent or guardian. Homebase unlocks as soon as they approve.
                   </SlotCard>
                 </KidAgeGatePending>
 
@@ -391,7 +391,7 @@ export default function App() {
                     title="Not available yet"
                     action={<button type="button" className="btn btn-gray" onClick={handleRestartAgeCheck}>Try again</button>}
                   >
-                    Local rules don't allow people under the minimum age to use Home Helper.
+                    Local rules don't allow people under the minimum age to use Homebase.
                   </SlotCard>
                 </KidAgeGateProhibited>
 

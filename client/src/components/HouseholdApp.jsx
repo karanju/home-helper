@@ -418,7 +418,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
         <div className="topbar-inner">
           <div className="brand">
             <span className="brand-mark"><House size={16} strokeWidth={2.25} /></span>
-            <span className="brand-name">Home Helper</span>
+            <span className="brand-name">Homebase</span>
             <span className="badge"><ShieldCheck size={12} strokeWidth={2.5} /> {config.label} · {config.badge}</span>
           </div>
           <nav className="topbar-actions" aria-label="Account">

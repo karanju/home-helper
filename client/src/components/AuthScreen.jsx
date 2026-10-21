@@ -51,7 +51,7 @@ export default function AuthScreen({ inviteToken, isConfigured }) {
     <main className="auth">
       <div className="auth-content">
         <span className="auth-icon"><House size={34} strokeWidth={2} /></span>
-        <h1 className="large-title">Home Helper</h1>
+        <h1 className="large-title">Homebase</h1>
         <p className="auth-subtitle">Your family's chores, with help that fits every age.</p>
 
         {invite && (
@@ -78,7 +78,7 @@ export default function AuthScreen({ inviteToken, isConfigured }) {
         {error && <p className="footnote text-danger">{error}</p>}
 
         <p className="footnote auth-footnote">
-          After signing in, everyone goes through a quick k-ID age check so Home Helper fits their age.
+          After signing in, everyone goes through a quick k-ID age check so Homebase fits their age.
         </p>
       </div>
     </main>

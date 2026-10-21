@@ -1,4 +1,4 @@
-# 🏠 Home Helper — "One household, three ages"
+# 🏠 Homebase — "One household, three ages"
 **Build for Everyone Hackathon (Google + k-ID) — Consumer AI Track**
 
 An age-aware household assistant that safely gates entry via a **k-ID age-verification widget**, dynamically reshaping its interface, capabilities, and Google Gemini AI guardrails to match the user's verified age bracket.

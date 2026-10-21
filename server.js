@@ -978,7 +978,7 @@ if (fs.existsSync(clientDistPath)) {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`===============================================`);
-  console.log(`🏠 Home Helper server running on http://0.0.0.0:${PORT}`);
+  console.log(`🏠 Homebase server running on http://0.0.0.0:${PORT}`);
   console.log(`🚀 Ready for Cloud Run & Local Demo`);
   console.log(`===============================================`);
 });

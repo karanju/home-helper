@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Home Helper only touches Firestore from the server (firebase-admin, which bypasses these rules).
+// Homebase only touches Firestore from the server (firebase-admin, which bypasses these rules).
 // Browsers never read or write it directly, so every client request is denied.
 service cloud.firestore {
   match /databases/{database}/documents {
