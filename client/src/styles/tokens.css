@@ -1,0 +1,120 @@
+/* Design tokens. Semantic colors follow the OS appearance; the accent follows the age mode. */
+:root {
+  color-scheme: light dark;
+
+  --font-text: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-rounded: ui-rounded, 'SF Pro Rounded', 'Fredoka', system-ui, sans-serif;
+  --font-display: var(--font-text);
+
+  /* Surfaces: grouped background with raised cards, as in iOS Settings */
+  --bg: #f2f2f7;
+  --surface: #ffffff;
+  --surface-2: #f2f2f7;
+  --fill: rgba(118, 118, 128, 0.12);
+  --fill-strong: rgba(118, 118, 128, 0.2);
+  --separator: rgba(60, 60, 67, 0.18);
+  --label: #1c1c1e;
+  --label-2: rgba(60, 60, 67, 0.72);
+  --label-3: rgba(60, 60, 67, 0.45);
+  --danger: #d70015;
+  --success: #248a3d;
+  --warning: #c93400;
+  --scrim: rgba(0, 0, 0, 0.32);
+  --material: rgba(249, 249, 251, 0.72);
+  --material-edge: rgba(255, 255, 255, 0.6);
+
+  /* One accent per age group; [data-age] picks which one is --accent */
+  --accent-kid: #e8590c;
+  --accent-teen: #007aff;
+  --accent-adult: #248a3d;
+  --accent: var(--accent-teen);
+  --on-accent: #ffffff;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 1px rgba(0, 0, 0, 0.02);
+  --shadow-sheet: 0 24px 64px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06);
+
+  --radius-control: 10px;
+  --radius-row: 14px;
+  --radius-card: 20px;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+
+  /* Type scale: tracking tightens as size grows, leading loosens as size shrinks */
+  --text-large-title: 700 2.125rem/1.1 var(--font-display);
+  --text-title: 700 1.375rem/1.2 var(--font-display);
+  --text-headline: 600 1.0625rem/1.3 var(--font-text);
+  --text-body: 400 1.0625rem/1.45 var(--font-text);
+  --text-callout: 400 1rem/1.45 var(--font-text);
+  --text-subhead: 400 0.9375rem/1.4 var(--font-text);
+  --text-footnote: 400 0.8125rem/1.4 var(--font-text);
+  --text-caption: 500 0.75rem/1.3 var(--font-text);
+
+  --press: 100ms ease-out;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --surface: #1c1c1e;
+    --surface-2: #2c2c2e;
+    --fill: rgba(118, 118, 128, 0.24);
+    --fill-strong: rgba(118, 118, 128, 0.36);
+    --separator: rgba(84, 84, 88, 0.6);
+    --label: #ffffff;
+    --label-2: rgba(235, 235, 245, 0.66);
+    --label-3: rgba(235, 235, 245, 0.36);
+    --danger: #ff6961;
+    --success: #30d158;
+    --warning: #ffb340;
+    --scrim: rgba(0, 0, 0, 0.56);
+    --material: rgba(28, 28, 30, 0.72);
+    --material-edge: rgba(255, 255, 255, 0.08);
+
+    --accent-kid: #ff9f0a;
+    --accent-teen: #0a84ff;
+    --accent-adult: #30d158;
+
+    --shadow-card: none;
+    --shadow-sheet: 0 24px 64px rgba(0, 0, 0, 0.6);
+  }
+}
+
+[data-age='kid'] { --accent: var(--accent-kid); --font-display: var(--font-rounded); }
+[data-age='teen'] { --accent: var(--accent-teen); }
+[data-age='adult'] { --accent: var(--accent-adult); }
+
+/* Bright accents in dark mode carry dark text so labels stay legible on them */
+@media (prefers-color-scheme: dark) {
+  [data-age='kid'], [data-age='adult'] { --on-accent: #000000; }
+}
+
+/* A soft tint of whichever accent is in effect */
+:root, [data-age] {
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root { --material: var(--surface); }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --separator: rgba(60, 60, 67, 0.5);
+    --label-2: rgba(60, 60, 67, 0.9);
+    --material: var(--surface);
+  }
+}
+
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root {
+    --separator: rgba(235, 235, 245, 0.45);
+    --label-2: rgba(235, 235, 245, 0.88);
+  }
+}
