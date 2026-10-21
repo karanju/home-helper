@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Circle, HelpCircle, ListChecks, LogOut, Plus, RotateCcw, Send, Shield, ShieldAlert, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { CheckCircle2, Circle, HelpCircle, ListChecks, LogOut, Plus, Send, Shield, ShieldAlert, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { useFeature } from './FeatureGate';
 import { authHeaders } from '../auth';
 import { AGE_CONFIG, MEMBERS, SEED_CHORES } from '../household';
@@ -57,6 +57,7 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
   const [memberFilter, setMemberFilter] = useState('all');
   const [newTitle, setNewTitle] = useState('');
   const [newAssignee, setNewAssignee] = useState(ageMode);
+  const [isAddOpen, setIsAddOpen] = useState(false);
   const [selectedChoreId, setSelectedChoreId] = useState(null);
 
   const [messages, setMessages] = useState([{ role: 'assistant', text: config.helperIntro }]);
@@ -100,7 +101,20 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
 
   const toggleChore = (id) => setChores(prev => prev.map(c => (c.id === id ? { ...c, done: !c.done } : c)));
   const removeChore = (id) => setChores(prev => prev.filter(c => c.id !== id));
-  const startNewDay = () => setChores(prev => prev.map(c => ({ ...c, done: false })));
+
+  // Preselect whoever the list is filtered to, so "Kid" filter + Add chore assigns to the kid
+  const openAddChore = () => {
+    setNewTitle('');
+    setNewAssignee(memberFilter === 'all' ? 'adult' : memberFilter);
+    setIsAddOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isAddOpen) return;
+    const onKey = (e) => e.key === 'Escape' && setIsAddOpen(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isAddOpen]);
 
   const showTab = (tab) => {
     setMobileTab(tab);
@@ -117,6 +131,9 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
       { id: Date.now(), emoji: '📝', title: newTitle.trim(), assignee, points: assignee === 'adult' ? 0 : 15, done: false, steps: [] }
     ]);
     setNewTitle('');
+    setIsAddOpen(false);
+    // Make sure the new chore is visible under the current filter
+    if (memberFilter !== 'all' && memberFilter !== assignee) setMemberFilter('all');
   };
 
   const askHelper = async (text) => {
@@ -222,8 +239,11 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
                     {m === 'all' ? 'Everyone' : `${AGE_CONFIG[m].avatar} ${AGE_CONFIG[m].label}`}
                   </button>
                 ))}
-                <button onClick={startNewDay} style={{ ...styles.chip, marginLeft: 'auto' }} title="Uncheck every chore">
-                  <RotateCcw size={12} /> New day
+                <button
+                  onClick={openAddChore}
+                  style={{ ...styles.chip, marginLeft: 'auto', backgroundColor: config.accent, borderColor: config.accent, color: '#0b1120' }}
+                >
+                  <Plus size={14} /> Add chore
                 </button>
               </div>
             )}
@@ -280,19 +300,15 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
               </div>
             )}
 
-            {config.canAddChores && (
-              <form onSubmit={addChore} style={{ ...styles.addForm, flexWrap: isMobile && config.canAssignOthers ? 'wrap' : 'nowrap' }}>
+            {/* Teens add their own chores inline; adults use the "Add chore" popup at the top of the list */}
+            {config.canAddChores && !config.canAssignOthers && (
+              <form onSubmit={addChore} style={styles.addForm}>
                 <input
                   value={newTitle}
                   onChange={(e) => setNewTitle(e.target.value)}
-                  placeholder={config.canAssignOthers ? 'Add a chore for the family...' : 'Add a chore for yourself...'}
-                  style={{ ...styles.input, ...(isMobile && config.canAssignOthers && { flexBasis: '100%' }) }}
+                  placeholder="Add a chore for yourself..."
+                  style={styles.input}
                 />
-                {config.canAssignOthers && (
-                  <select value={newAssignee} onChange={(e) => setNewAssignee(e.target.value)} style={{ ...styles.select, ...(isMobile && { flex: 1 }) }}>
-                    {MEMBERS.map(m => <option key={m} value={m}>{AGE_CONFIG[m].label}</option>)}
-                  </select>
-                )}
                 <button type="submit" style={accentButton} disabled={!newTitle.trim()}>
                   <Plus size={16} /> Add
                 </button>
@@ -388,6 +404,63 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
           </section>
         )}
       </main>
+
+      {isAddOpen && (
+        <div style={styles.modalBackdrop} onClick={() => setIsAddOpen(false)}>
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-chore-title"
+            onSubmit={addChore}
+            onClick={(e) => e.stopPropagation()}
+            style={{ ...styles.modal, ...(isMobile && styles.modalMobile) }}
+          >
+            <div style={styles.cardHeader}>
+              <h2 id="add-chore-title" style={styles.cardTitle}>Add a chore</h2>
+              <button type="button" onClick={() => setIsAddOpen(false)} style={styles.iconBtn} aria-label="Close">
+                <X size={20} color="#94a3b8" />
+              </button>
+            </div>
+
+            <label style={styles.fieldLabel} htmlFor="add-chore-name">Chore</label>
+            <input
+              id="add-chore-name"
+              autoFocus
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              placeholder="e.g. Water the plants"
+              style={{ ...styles.input, width: '100%' }}
+            />
+
+            <span style={{ ...styles.fieldLabel, marginTop: 16 }}>Assign to</span>
+            <div style={styles.assigneeRow}>
+              {MEMBERS.map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setNewAssignee(m)}
+                  aria-pressed={newAssignee === m}
+                  style={{
+                    ...styles.assigneeOption,
+                    borderColor: newAssignee === m ? AGE_CONFIG[m].accent : '#334155',
+                    backgroundColor: newAssignee === m ? AGE_CONFIG[m].accentSoft : '#0f172a'
+                  }}
+                >
+                  <span style={{ fontSize: 22 }}>{AGE_CONFIG[m].avatar}</span>
+                  {AGE_CONFIG[m].label}
+                </button>
+              ))}
+            </div>
+
+            <div style={styles.modalActions}>
+              <button type="button" onClick={() => setIsAddOpen(false)} style={styles.ghostBtn}>Cancel</button>
+              <button type="submit" style={accentButton} disabled={!newTitle.trim()}>
+                <Plus size={16} /> Add chore
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {selectedChore && (
         <div className="kid-drawer-backdrop household-guide-backdrop" onClick={() => setSelectedChoreId(null)}>
@@ -717,6 +790,67 @@ const styles = {
     fontSize: '13px',
     fontWeight: '600',
   },
+  modalBackdrop: {
+    position: 'fixed',
+    inset: 0,
+    zIndex: 10000,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '16px',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backdropFilter: 'blur(4px)',
+  },
+  modal: {
+    width: '100%',
+    maxWidth: '420px',
+    backgroundColor: '#131c2e',
+    border: '1px solid #334155',
+    borderRadius: '18px',
+    padding: '20px',
+    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)',
+  },
+  // Bottom sheet on phones, so the form sits near the thumb and above the keyboard
+  modalMobile: {
+    alignSelf: 'flex-end',
+    maxWidth: 'none',
+    margin: '0 -16px -16px',
+    width: 'calc(100% + 32px)',
+    borderRadius: '20px 20px 0 0',
+    paddingBottom: 'calc(20px + env(safe-area-inset-bottom))',
+  },
+  fieldLabel: {
+    display: 'block',
+    fontSize: '12px',
+    fontWeight: '700',
+    color: '#94a3b8',
+    marginBottom: '6px',
+  },
+  assigneeRow: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    gap: '8px',
+  },
+  assigneeOption: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '10px 4px',
+    border: '1px solid',
+    borderRadius: '12px',
+    color: '#f8fafc',
+    fontSize: '13px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+  modalActions: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '8px',
+    marginTop: '20px',
+  },
   addForm: {
     display: 'flex',
     gap: '8px',
@@ -731,16 +865,6 @@ const styles = {
     border: '1px solid #334155',
     color: '#f8fafc',
     padding: '10px 12px',
-    borderRadius: '10px',
-    fontSize: '16px',
-    fontFamily: 'inherit',
-  },
-  select: {
-    minHeight: '44px',
-    backgroundColor: '#0f172a',
-    border: '1px solid #334155',
-    color: '#f8fafc',
-    padding: '0 8px',
     borderRadius: '10px',
     fontSize: '16px',
     fontFamily: 'inherit',
