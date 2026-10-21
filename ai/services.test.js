@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { callGemini, candidateText } from './gemini.js';
-import { InputError, toGeminiContents } from './validate.js';
+import { InputError, optionalImage, toGeminiContents } from './validate.js';
+import { IMAGE_RULES } from './prompts.js';
 import { buildInstructionsPayload, generateInstructions, parseAgeSet, parseInstructionsInput } from './instructions.js';
 import { buildTaskChatPayload, parseTaskChatInput, runTaskChat } from './taskChat.js';
 import { buildParentAssistantPayload, cleanProposedChores, parseParentAssistantInput, runParentAssistant } from './parentAssistant.js';
@@ -37,6 +38,32 @@ test('Gemini contents drop a leading assistant greeting and map roles', () => {
   const contents = toGeminiContents([{ role: 'assistant', text: 'Hi!' }, { role: 'user', text: 'a' }, { role: 'assistant', text: 'b' }], 'c');
   assert.deepEqual(contents.map(c => c.role), ['user', 'model', 'user']);
   assert.equal(contents.at(-1).parts[0].text, 'c');
+});
+
+const PHOTO = { mimeType: 'image/jpeg', data: '/9j/4AAQSkZJRg==' };
+
+test('chat photos must be small base64 jpeg, png or webp', () => {
+  assert.equal(optionalImage(undefined), null);
+  assert.deepEqual(optionalImage({ ...PHOTO, extra: 1 }), PHOTO);
+  assert.throws(() => optionalImage({ mimeType: 'image/gif', data: PHOTO.data }), InputError);
+  assert.throws(() => optionalImage({ mimeType: 'image/png', data: 'data:image/png;base64,abc' }), InputError);
+  assert.throws(() => optionalImage({ mimeType: 'image/png', data: 'A'.repeat(2.1 * 1024 * 1024) }), InputError);
+});
+
+test('a photo goes before the text on the new message only', () => {
+  const contents = toGeminiContents([{ role: 'user', text: 'a' }, { role: 'assistant', text: 'b' }], 'c', PHOTO);
+  assert.deepEqual(contents[0].parts, [{ text: 'a' }]);
+  assert.deepEqual(contents.at(-1).parts, [{ inlineData: PHOTO }, { text: 'c' }]);
+});
+
+test('chat payloads add the photo rules only when a photo is attached', () => {
+  const task = parseTaskChatInput({ chore: { title: 'Fold clothes' }, message: 'ok?', image: PHOTO });
+  assert.ok(buildTaskChatPayload('kid', task).systemInstruction.parts[0].text.includes(IMAGE_RULES));
+  assert.ok(!buildTaskChatPayload('kid', { ...task, image: null }).systemInstruction.parts[0].text.includes(IMAGE_RULES));
+
+  const parent = buildParentAssistantPayload(parseParentAssistantInput({ message: 'what is this?', image: PHOTO }), ROSTER);
+  assert.ok(parent.systemInstruction.parts[0].text.includes(IMAGE_RULES));
+  assert.deepEqual(parent.contents.at(-1).parts[0], { inlineData: PHOTO });
 });
 
 test('candidateText skips thoughts and function calls', () => {

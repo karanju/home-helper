@@ -1,6 +1,6 @@
 import { callGemini, candidateText, hasFunctionCall } from './gemini.js';
-import { SYSTEM_PROMPTS, chatGenerationConfig } from './prompts.js';
-import { chatHistory, promptSafe, requiredString, toGeminiContents } from './validate.js';
+import { IMAGE_RULES, SYSTEM_PROMPTS, chatGenerationConfig } from './prompts.js';
+import { chatHistory, optionalImage, promptSafe, requiredString, toGeminiContents } from './validate.js';
 
 const MAX_PROPOSED = 10;
 const DEFAULT_REPLY = 'Here are the chores I would add. Tap Add to put them on the board.';
@@ -54,14 +54,15 @@ ${members}
 export function parseParentAssistantInput(body) {
   return {
     history: chatHistory(body?.history, { max: 20, maxLength: 4000 }),
-    message: requiredString(body?.message, 'message', 1000)
+    message: requiredString(body?.message, 'message', 1000),
+    image: optionalImage(body?.image)
   };
 }
 
-export function buildParentAssistantPayload({ history, message }, roster) {
+export function buildParentAssistantPayload({ history, message, image = null }, roster) {
   return {
-    systemInstruction: { parts: [{ text: SYSTEM_PROMPTS.adult + '\n' + toolRules(roster) }] },
-    contents: toGeminiContents(history, message),
+    systemInstruction: { parts: [{ text: SYSTEM_PROMPTS.adult + '\n' + toolRules(roster) + (image ? '\n' + IMAGE_RULES : '') }] },
+    contents: toGeminiContents(history, message, image),
     tools: [{ functionDeclarations: [proposeChoresTool(roster)] }],
     toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
     // Picking chores from a request needs little reasoning, and minimal thinking answers several times faster
