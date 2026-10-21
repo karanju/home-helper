@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import './teen-layout.css';
 import { ChefHat, Flame, ShieldAlert, Send, Sparkles, AlertTriangle, LogOut, Clock, Check, Shield } from 'lucide-react';
 import { KidPermission } from '@k-id/core';
 
@@ -48,21 +49,21 @@ export default function TeenMode({ onSignOut, sessionId, onOpenSettings }) {
   };
 
   return (
-    <div style={styles.container}>
+    <div className="teen-site" style={styles.container}>
       {/* Header */}
-      <header style={styles.header}>
-        <div style={styles.headerLeft}>
-          <div style={styles.avatar}>🧑</div>
+      <header className="teen-header" style={styles.header}>
+        <div className="teen-header-left" style={styles.headerLeft}>
+          <div className="teen-avatar" style={styles.avatar}>🧑</div>
           <div>
-            <div style={styles.titleRow}>
-              <h1 style={styles.title}>Teen Culinary & Home Hub</h1>
+            <div className="teen-title-row" style={styles.titleRow}>
+              <h1 className="teen-title" style={styles.title}>Teen Culinary & Home Hub</h1>
               <span style={styles.verifiedTag}>🛡️ k-ID Verified 13–17</span>
             </div>
-            <p style={styles.subtitle}>Cooking independence + smart safety guardrails</p>
+            <p className="teen-subtitle" style={styles.subtitle}>Cooking independence + smart safety guardrails</p>
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div className="teen-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {onOpenSettings && (
             <button onClick={onOpenSettings} style={styles.settingsHeaderBtn} title="Manage k-ID Permissions">
               <Shield size={16} color="#06b6d4" />
@@ -77,21 +78,21 @@ export default function TeenMode({ onSignOut, sessionId, onOpenSettings }) {
       </header>
 
       {/* Safety Guardrails Banner */}
-      <div style={styles.guardrailCard}>
+      <div className="teen-guardrails" style={styles.guardrailCard}>
         <div style={styles.guardrailHeader}>
           <ShieldAlert size={18} color="#06b6d4" />
           <span style={styles.guardrailTitle}>Active Kitchen Safety Guardrails</span>
         </div>
-        <div style={styles.safetyBadges}>
+        <div className="teen-safety-badges" style={styles.safetyBadges}>
           <span style={styles.safetyPill}><Check size={14} color="#06b6d4" /> Stove/Oven shutoff checks</span>
           <span style={styles.safetyPill}><Check size={14} color="#06b6d4" /> Safe knife grip reminders</span>
           <span style={styles.safetyPill}><Check size={14} color="#06b6d4" /> Microwave metal prevention</span>
         </div>
       </div>
 
-      <div style={styles.mainLayout}>
+      <div className="teen-main-layout" style={styles.mainLayout}>
         {/* Quick Safety Cards Sidebar */}
-        <aside style={styles.sidebar}>
+        <aside className="teen-sidebar" style={styles.sidebar}>
           <h2 style={styles.sidebarTitle}>🔥 Kitchen Rules</h2>
           <div style={styles.ruleCard}>
             <div style={styles.ruleHeader}>
@@ -110,7 +111,7 @@ export default function TeenMode({ onSignOut, sessionId, onOpenSettings }) {
           </div>
 
           <h3 style={{ ...styles.sidebarTitle, marginTop: '20px' }}>⚡ Quick Ideas</h3>
-          <div style={styles.quickPromptsList}>
+          <div className="teen-quick-prompts-list" style={styles.quickPromptsList}>
             {quickPrompts.map((q, idx) => (
               <button
                 key={idx}
@@ -124,6 +125,7 @@ export default function TeenMode({ onSignOut, sessionId, onOpenSettings }) {
         </aside>
 
         {/* AI Chat Area with k-ID Permission Guard */}
+        <div className="teen-chat-column">
         <KidPermission
           name="ai-chat"
           fallback={
@@ -211,6 +213,7 @@ export default function TeenMode({ onSignOut, sessionId, onOpenSettings }) {
             </form>
           </section>
         </KidPermission>
+        </div>
       </div>
     </div>
   );

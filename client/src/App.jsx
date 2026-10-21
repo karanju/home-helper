@@ -48,14 +48,32 @@ function VerifiedApp({ sessionId, forcedMode, onSignOut, onOpenSettings }) {
       else if (age < 18) resolvedMode = 'teen';
       else resolvedMode = 'adult';
     } else if (session?.ageStatus) {
-      const status = session.ageStatus.toUpperCase();
-      if (status.includes('CHILD') || status.includes('UNDER')) resolvedMode = 'kid';
-      else if (status.includes('TEEN')) resolvedMode = 'teen';
-      else resolvedMode = 'adult';
+      const status = String(session.ageStatus).toUpperCase();
+      const ageValues = status.match(/\d+/g)?.map(Number) ?? [];
+      if (status.includes('CHILD') || status.includes('UNDER_13') || ageValues.some(age => age < 13)) {
+        resolvedMode = 'kid';
+      } else if (
+        status.includes('TEEN') ||
+        status.includes('ADOLESCENT') ||
+        status.includes('MINOR') ||
+        ageValues.some(age => age >= 13 && age < 18)
+      ) {
+        resolvedMode = 'teen';
+      } else if (status.includes('ADULT') || status.includes('18+') || status.includes('18_PLUS')) {
+        resolvedMode = 'adult';
+      } else {
+        resolvedMode = 'teen';
+      }
     } else {
-      resolvedMode = 'teen'; // Default fallback
+      resolvedMode = 'teen'; // Avoid granting adult mode without an adult age result
     }
   }
+
+  console.info('[Home Helper] Age-mode routing', {
+    verifiedAge: ageVerification?.verifiedAge ?? null,
+    ageStatus: session?.ageStatus ?? null,
+    resolvedMode,
+  });
 
   return (
     <>
@@ -323,22 +341,7 @@ export default function App() {
             onClose={() => setIsSettingsOpen(false)}
           />
 
-          {/* Floating Demo Bar for judges and live testing */}
-          <div className="demo-bar">
-            <span className="label">Live Demo Fast-Track:</span>
-            <button className="demo-btn" onClick={() => handleForceMode('kid')}>
-              🧒 Kid
-            </button>
-            <button className="demo-btn" onClick={() => handleForceMode('teen')}>
-              🧑 Teen
-            </button>
-            <button className="demo-btn" onClick={() => handleForceMode('adult')}>
-              👤 Adult
-            </button>
-            <button className="demo-btn" onClick={() => setIsSettingsOpen(true)}>
-              ⚙️ Permissions
-            </button>
-          </div>
+
         </div>
       </KidSessionProvider>
     </KidCoreProvider>
