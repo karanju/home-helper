@@ -132,23 +132,29 @@ export default function App() {
     }
   };
 
+  const [sessionKey, setSessionKey] = useState(1);
+
   const handleSignOut = () => {
+    console.log('[k-ID] Signing out and resetting session...');
+    // Clear all stored session data
     localStorage.removeItem('kid_session_id');
     localStorage.removeItem('kid_challenge_id');
+    sessionStorage.clear();
+
+    // Reset local states
     setSessionId(undefined);
     setChallengeId(undefined);
     setForcedAgeMode(null);
+    setSessionKey(prev => prev + 1);
 
-    const url = new URL(window.location);
-    url.searchParams.delete('mock-age');
-    window.history.replaceState({}, '', url);
+    // Clean URL and perform a hard navigation to wipe in-memory device session
+    window.location.href = '/';
   };
 
   const handleForceMode = (mode) => {
-    setForcedAgeMode(mode);
-    const url = new URL(window.location);
-    url.searchParams.set('mock-age', mode);
-    window.history.replaceState({}, '', url);
+    console.log(`[k-ID] Switching to forced mode: ${mode}`);
+    // Navigate with query param to ensure fresh mode load
+    window.location.href = `/?mock-age=${mode}`;
   };
 
   // If ?mock-age bypass is active, render immediately to guarantee demo uptime
