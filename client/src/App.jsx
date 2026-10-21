@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   KidCoreProvider,
   KidSessionProvider,
@@ -16,7 +16,7 @@ import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
 import FamilyPanel from './components/FamilyPanel';
 import { DemoModeContext } from './components/FeatureGate';
-import { apiFetch, authHeaders, getAuthToken, setAuthToken } from './auth';
+import { apiFetch, authHeaders, initAuth, onAuthChange, signOutUser } from './auth';
 import { Shield, Clock, AlertTriangle, XCircle } from 'lucide-react';
 
 const K_ID_CONFIG = {
@@ -63,7 +63,7 @@ function GateFrame({ children }) {
 }
 
 // Inner component rendered once the player passes the k-ID age gate
-function VerifiedApp({ sessionId, forcedMode, serverAgeMode, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
+function VerifiedApp({ sessionId, forcedMode, serverAgeMode, family, myUserId, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
   const { session, ageVerification } = useKidSession();
 
   useEffect(() => {
@@ -111,6 +111,8 @@ function VerifiedApp({ sessionId, forcedMode, serverAgeMode, familyName, onSignO
       key={resolvedMode}
       ageMode={resolvedMode}
       sessionId={sessionId}
+      family={family}
+      myUserId={myUserId}
       familyName={familyName}
       onSignOut={onSignOut}
       onOpenSettings={onOpenSettings}
@@ -120,10 +122,13 @@ function VerifiedApp({ sessionId, forcedMode, serverAgeMode, familyName, onSignO
 }
 
 export default function App() {
-  // The logged-in account from /api/me; its k-ID ids persist the session across launches and devices
+  // The signed-in account from /api/me; its k-ID ids persist the session across launches and devices
   const [me, setMe] = useState(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(() => Boolean(getAuthToken()));
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isSignInConfigured, setIsSignInConfigured] = useState(true);
   const [inviteToken, setInviteToken] = useState(() => new URLSearchParams(window.location.search).get('invite'));
+  const inviteTokenRef = useRef(inviteToken);
+  inviteTokenRef.current = inviteToken;
   const [forcedAgeMode, setForcedAgeMode] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFamilyOpen, setIsFamilyOpen] = useState(false);
@@ -134,17 +139,12 @@ export default function App() {
   const challengeId = me?.user.kidChallengeId || undefined;
 
   const refreshMe = useCallback(async () => {
-    if (!getAuthToken()) {
-      setMe(null);
-      setIsAuthLoading(false);
-      return;
-    }
     try {
       setMe(await apiFetch('/api/me'));
     } catch (err) {
       console.error('[Auth] Could not load account:', err);
       if (err.status === 401) {
-        setAuthToken(null);
+        await signOutUser();
         setMe(null);
       }
     } finally {
@@ -152,8 +152,36 @@ export default function App() {
     }
   }, []);
 
+  // Follow Firebase's sign-in state. The token also refreshes hourly, so only reload when the user changes.
   useEffect(() => {
-    refreshMe();
+    let unsubscribe = () => {};
+    let currentUid = null;
+
+    initAuth().then((configured) => {
+      setIsSignInConfigured(configured);
+      unsubscribe = onAuthChange(async (firebaseUser) => {
+        const uid = firebaseUser?.uid ?? null;
+        if (uid === currentUid && uid !== null) return;
+        currentUid = uid;
+
+        if (!firebaseUser) {
+          setMe(null);
+          setIsAuthLoading(false);
+          return;
+        }
+        // Join before the k-ID age gate starts, so a minor's consent request goes to the inviting admin
+        if (inviteTokenRef.current) {
+          try {
+            await apiFetch(`/api/invites/${encodeURIComponent(inviteTokenRef.current)}/accept`, { method: 'POST' });
+          } catch (err) {
+            console.warn('[Family] Could not accept invite:', err.message);
+          }
+        }
+        refreshMe();
+      });
+    });
+
+    return () => unsubscribe();
   }, [refreshMe]);
 
   const clearInvite = useCallback(() => {
@@ -233,7 +261,7 @@ export default function App() {
     try {
       const res = await fetch('/api/claim', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify({ claimToken })
       });
       const data = await res.json();
@@ -245,13 +273,8 @@ export default function App() {
 
   const handleSignOut = async () => {
     console.log('[k-ID] Signing out and resetting session...');
-    try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
-    } catch (err) {
-      console.warn('[Auth] Logout request failed:', err.message);
-    }
-    // The k-ID ids live on the account, so only the login token and session storage need clearing here
-    setAuthToken(null);
+    // The k-ID ids live on the account, so only the Google sign-in and session storage need clearing here
+    await signOutUser();
     sessionStorage.clear();
 
     // Clean URL and perform a hard navigation to wipe in-memory device session
@@ -299,7 +322,7 @@ export default function App() {
             <span style={styles.brandTitle}>Home Helper</span>
           </div>
         </header>
-        <AuthScreen inviteToken={inviteToken} onAuthed={refreshMe} />
+        <AuthScreen inviteToken={inviteToken} isConfigured={isSignInConfigured} />
       </div>
     );
   }
@@ -384,6 +407,8 @@ export default function App() {
                     sessionId={sessionId}
                     forcedMode={forcedAgeMode}
                     serverAgeMode={me.ageMode}
+                    family={me.family}
+                    myUserId={me.user.id}
                     familyName={me.family?.name}
                     onSignOut={handleSignOut}
                     onOpenSettings={() => setIsSettingsOpen(true)}

@@ -1,14 +1,26 @@
 import React, { useEffect, useState } from 'react';
-import { Users, LogIn, UserPlus } from 'lucide-react';
-import { apiFetch, setAuthToken } from '../auth';
+import { Users } from 'lucide-react';
+import { apiFetch, signInWithGoogle } from '../auth';
 
-export default function AuthScreen({ inviteToken, onAuthed }) {
-  const [mode, setMode] = useState(inviteToken ? 'signup' : 'login');
+// Popup errors that just mean "the person closed it" don't deserve an error message
+const DISMISSED_CODES = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request', 'auth/user-cancelled'];
+
+function GoogleMark() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true">
+      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z" />
+      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z" />
+      <path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z" />
+      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z" />
+    </svg>
+  );
+}
+
+export default function AuthScreen({ inviteToken, isConfigured }) {
   const [invite, setInvite] = useState(null);
   const [inviteError, setInviteError] = useState(null);
-  const [form, setForm] = useState({ displayName: '', email: '', username: '', identifier: '', password: '' });
   const [error, setError] = useState(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
   useEffect(() => {
     if (!inviteToken) return;
@@ -17,42 +29,21 @@ export default function AuthScreen({ inviteToken, onAuthed }) {
       .catch((err) => setInviteError(err.message));
   }, [inviteToken]);
 
-  const update = (field) => (e) => setForm({ ...form, [field]: e.target.value });
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  // App.jsx picks up the signed-in user (and accepts the invite) from the auth state change
+  const handleSignIn = async () => {
     setError(null);
-    setIsSubmitting(true);
+    setIsSigningIn(true);
     try {
-      const { token } = mode === 'signup'
-        ? await apiFetch('/api/auth/signup', {
-            method: 'POST',
-            body: {
-              displayName: form.displayName,
-              email: form.email || undefined,
-              username: form.username || undefined,
-              password: form.password
-            }
-          })
-        : await apiFetch('/api/auth/login', {
-            method: 'POST',
-            body: { identifier: form.identifier, password: form.password }
-          });
-      setAuthToken(token);
-
-      // Join before the k-ID age gate starts, so a minor's consent request goes to the inviting admin
-      if (invite) {
-        try {
-          await apiFetch(`/api/invites/${encodeURIComponent(inviteToken)}/accept`, { method: 'POST' });
-        } catch (err) {
-          console.warn('[Family] Could not accept invite:', err.message);
-        }
-      }
-      onAuthed();
+      await signInWithGoogle();
     } catch (err) {
-      setError(err.message);
+      if (!DISMISSED_CODES.includes(err.code)) {
+        console.error('[Auth] Google sign-in failed:', err);
+        setError(err.code === 'auth/popup-blocked'
+          ? 'Your browser blocked the sign-in window. Allow pop-ups for this site and try again.'
+          : 'Could not sign in with Google. Please try again.');
+      }
     } finally {
-      setIsSubmitting(false);
+      setIsSigningIn(false);
     }
   };
 
@@ -61,7 +52,7 @@ export default function AuthScreen({ inviteToken, onAuthed }) {
       <div style={styles.card}>
         {invite && (
           <div style={styles.inviteBanner}>
-            <Users size={18} color="#a5b4fc" />
+            <Users size={18} color="#a5b4fc" style={{ flexShrink: 0 }} />
             <span>
               <strong>{invite.invitedByName}</strong> invited you to join <strong>{invite.familyName}</strong>
             </span>
@@ -69,61 +60,21 @@ export default function AuthScreen({ inviteToken, onAuthed }) {
         )}
         {inviteError && <p style={styles.error}>{inviteError}</p>}
 
-        <div style={styles.tabs}>
-          <button
-            style={{ ...styles.tab, ...(mode === 'login' ? styles.tabActive : {}) }}
-            onClick={() => setMode('login')}
-          >
-            <LogIn size={14} /> Log in
-          </button>
-          <button
-            style={{ ...styles.tab, ...(mode === 'signup' ? styles.tabActive : {}) }}
-            onClick={() => setMode('signup')}
-          >
-            <UserPlus size={14} /> Create account
-          </button>
-        </div>
+        <h1 style={styles.title}>Welcome to Home Helper</h1>
+        <p style={styles.subtitle}>Your family's chores, with help that fits every age.</p>
 
-        <form onSubmit={handleSubmit} style={styles.form}>
-          {mode === 'signup' ? (
-            <>
-              <label style={styles.label}>
-                Your name
-                <input style={styles.input} value={form.displayName} onChange={update('displayName')} required />
-              </label>
-              <label style={styles.label}>
-                Email <span style={styles.hint}>(needed to create or run a family)</span>
-                <input style={styles.input} type="email" value={form.email} onChange={update('email')} />
-              </label>
-              <label style={styles.label}>
-                Username <span style={styles.hint}>(if you don't have an email)</span>
-                <input style={styles.input} value={form.username} onChange={update('username')} />
-              </label>
-            </>
-          ) : (
-            <label style={styles.label}>
-              Email or username
-              <input style={styles.input} value={form.identifier} onChange={update('identifier')} required />
-            </label>
-          )}
-          <label style={styles.label}>
-            Password
-            <input
-              style={styles.input}
-              type="password"
-              minLength={mode === 'signup' ? 8 : undefined}
-              value={form.password}
-              onChange={update('password')}
-              required
-            />
-          </label>
-
-          {error && <p style={styles.error}>{error}</p>}
-
-          <button type="submit" style={styles.submitBtn} disabled={isSubmitting}>
-            {isSubmitting ? 'Please wait…' : mode === 'signup' ? 'Create account' : 'Log in'}
+        {isConfigured ? (
+          <button type="button" onClick={handleSignIn} style={styles.googleBtn} disabled={isSigningIn}>
+            <GoogleMark />
+            <span>{isSigningIn ? 'Signing in…' : 'Continue with Google'}</span>
           </button>
-        </form>
+        ) : (
+          <p style={styles.notice}>
+            Sign-in isn't configured on this server yet. You can still try the app with <code>?mock-age=kid</code>, <code>teen</code> or <code>adult</code>.
+          </p>
+        )}
+
+        {error && <p style={{ ...styles.error, marginTop: 12 }}>{error}</p>}
 
         <p style={styles.footnote}>
           After signing in, everyone goes through a quick k-ID age check so Home Helper fits their age.
@@ -137,7 +88,7 @@ const styles = {
   main: {
     maxWidth: '440px',
     margin: '36px auto',
-    padding: '0 20px 80px',
+    padding: '0 16px 80px',
     width: '100%',
   },
   card: {
@@ -159,71 +110,48 @@ const styles = {
     padding: '12px 14px',
     marginBottom: '18px',
   },
-  tabs: {
-    display: 'flex',
-    gap: '8px',
-    marginBottom: '18px',
+  title: {
+    fontSize: '22px',
+    fontWeight: '800',
+    color: '#ffffff',
   },
-  tab: {
-    flex: 1,
+  subtitle: {
+    fontSize: '14px',
+    color: '#94a3b8',
+    marginTop: '6px',
+    marginBottom: '22px',
+    lineHeight: 1.5,
+  },
+  // Follows Google's sign-in button guidance: white button, "G" mark, neutral text
+  googleBtn: {
+    width: '100%',
+    minHeight: '48px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '6px',
-    backgroundColor: '#0f172a',
-    border: '1px solid #1e293b',
-    color: '#94a3b8',
-    padding: '10px',
+    gap: '12px',
+    backgroundColor: '#ffffff',
+    border: '1px solid #dadce0',
     borderRadius: '10px',
-    fontSize: '13px',
+    color: '#1f1f1f',
+    fontSize: '15px',
     fontWeight: '600',
+    fontFamily: 'inherit',
     cursor: 'pointer',
   },
-  tabActive: {
-    backgroundColor: '#1e293b',
-    borderColor: '#6366f1',
-    color: '#ffffff',
-  },
-  form: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '14px',
-  },
-  label: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '6px',
+  notice: {
     fontSize: '13px',
-    fontWeight: '600',
     color: '#cbd5e1',
-  },
-  hint: {
-    fontWeight: '400',
-    color: '#64748b',
-  },
-  input: {
-    backgroundColor: '#0f172a',
+    lineHeight: 1.6,
+    background: '#0f172a',
     border: '1px solid #334155',
     borderRadius: '10px',
-    padding: '10px 12px',
-    fontSize: '14px',
-    color: '#f8fafc',
+    padding: '12px 14px',
   },
   error: {
     fontSize: '13px',
     color: '#f87171',
     margin: 0,
-  },
-  submitBtn: {
-    backgroundColor: '#6366f1',
-    border: 'none',
-    color: '#ffffff',
-    padding: '12px',
-    borderRadius: '10px',
-    fontSize: '14px',
-    fontWeight: '700',
-    cursor: 'pointer',
-    marginTop: '4px',
   },
   footnote: {
     fontSize: '12px',

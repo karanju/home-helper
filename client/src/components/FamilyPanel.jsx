@@ -61,10 +61,6 @@ function CreateFamily({ me, onChanged }) {
   const [name, setName] = useState('');
   const [error, setError] = useState(null);
 
-  if (!me.user.email) {
-    return <p style={styles.muted}>Family admins need an email address on their account so k-ID consent requests can reach them.</p>;
-  }
-
   if (!me.user.adultVerified) {
     return <AdultVerification intro="Only verified adults can create a family." onChanged={onChanged} />;
   }
@@ -169,7 +165,12 @@ function MemberList({ me, onChanged }) {
         const isSelf = member.userId === me.user.id;
         return (
           <div key={member.userId} style={styles.memberRow}>
-            <div style={styles.memberInfo}>
+            {member.photoURL ? (
+              <img src={member.photoURL} alt="" referrerPolicy="no-referrer" style={styles.memberPhoto} />
+            ) : (
+              <span style={styles.memberInitial} aria-hidden="true">{member.displayName.charAt(0).toUpperCase()}</span>
+            )}
+            <div style={{ ...styles.memberInfo, flex: 1, minWidth: 0 }}>
               <span style={styles.memberName}>{member.displayName}{isSelf ? ' (you)' : ''}</span>
               <span style={styles.badges}>
                 {member.role === 'admin' && <span style={styles.badge}><Crown size={11} /> Admin</span>}
@@ -382,6 +383,25 @@ const styles = {
     backgroundColor: '#0f172a',
     border: '1px solid #1e293b',
     borderRadius: '10px',
+  },
+  memberPhoto: {
+    width: '32px',
+    height: '32px',
+    borderRadius: '50%',
+    flexShrink: 0,
+  },
+  memberInitial: {
+    width: '32px',
+    height: '32px',
+    borderRadius: '50%',
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1e293b',
+    color: '#cbd5e1',
+    fontSize: '14px',
+    fontWeight: '700',
   },
   memberInfo: {
     display: 'flex',

@@ -3,21 +3,10 @@ import { CheckCircle2, Circle, HelpCircle, ListChecks, LogOut, Plus, Send, Shiel
 import { useFeature } from './FeatureGate';
 import { authHeaders } from '../auth';
 import { AGE_CONFIG, MEMBERS, SEED_CHORES } from '../household';
+import { useChores } from '../useChores';
 import './kid-mode.css';
 
-const STORAGE_KEY = 'home_helper_chores_v1';
 const MOBILE_QUERY = '(max-width: 720px)';
-
-function loadChores() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (Array.isArray(saved)) {
-      const savedIds = new Set(saved.map(chore => chore.id));
-      return [...saved, ...SEED_CHORES.filter(chore => !savedIds.has(chore.id))];
-    }
-  } catch {}
-  return SEED_CHORES;
-}
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
@@ -48,15 +37,24 @@ function RichText({ text }) {
   });
 }
 
-export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
+export default function HouseholdApp({ ageMode, sessionId, family, myUserId, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
   const config = AGE_CONFIG[ageMode];
   const canUseAi = useFeature('ai-chat');
   const isMobile = useIsMobile();
 
-  const [chores, setChores] = useState(loadChores);
+  // In a family, chores are shared and assigned to real people; otherwise they're local, assigned to age groups
+  const inFamily = Boolean(family && myUserId);
+  const { chores, error: choreError, addChore: saveChore, toggleChore, removeChore } = useChores({ inFamily });
+  const members = inFamily
+    ? family.members.map(m => ({ id: m.userId, name: m.displayName.split(' ')[0], ageMode: m.ageMode || 'kid' }))
+    : MEMBERS.map(m => ({ id: m, name: AGE_CONFIG[m].label, ageMode: m }));
+  const memberById = Object.fromEntries(members.map(m => [m.id, m]));
+  const myMemberId = inFamily ? myUserId : ageMode;
+
   const [memberFilter, setMemberFilter] = useState('all');
   const [newTitle, setNewTitle] = useState('');
-  const [newAssignee, setNewAssignee] = useState(ageMode);
+  const [newIdea, setNewIdea] = useState(null);
+  const [newAssignee, setNewAssignee] = useState(myMemberId);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [selectedChoreId, setSelectedChoreId] = useState(null);
 
@@ -80,12 +78,6 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [selectedChoreId]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(chores));
-    } catch {}
-  }, [chores]);
-
   // Scroll only the message list, never the page (scrollIntoView would jump the page on load)
   useEffect(() => {
     const el = messagesRef.current;
@@ -93,20 +85,26 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
   }, [messages, loading, mobileTab]);
 
   const visibleChores = config.seesWholeFamily
-    ? chores.filter(c => memberFilter === 'all' || c.assignee === memberFilter)
-    : chores.filter(c => c.assignee === ageMode);
+    ? chores.filter(c => memberFilter === 'all' || c.assigneeId === memberFilter)
+    : chores.filter(c => c.assigneeId === myMemberId);
   const doneCount = visibleChores.filter(c => c.done).length;
   const earned = visibleChores.filter(c => c.done).reduce((sum, c) => sum + (c.points || 0), 0);
   const selectedChore = chores.find(c => c.id === selectedChoreId);
 
-  const toggleChore = (id) => setChores(prev => prev.map(c => (c.id === id ? { ...c, done: !c.done } : c)));
-  const removeChore = (id) => setChores(prev => prev.filter(c => c.id !== id));
-
-  // Preselect whoever the list is filtered to, so "Kid" filter + Add chore assigns to the kid
+  // Preselect whoever the list is filtered to, so filtering to the kid then tapping Add assigns to the kid
   const openAddChore = () => {
     setNewTitle('');
-    setNewAssignee(memberFilter === 'all' ? 'adult' : memberFilter);
+    setNewIdea(null);
+    setNewAssignee(memberFilter === 'all' ? myMemberId : memberFilter);
     setIsAddOpen(true);
+  };
+
+  // Ready-made chores (with steps and illustrations) that suit the age of whoever is picked
+  const assigneeAge = memberById[newAssignee]?.ageMode || 'kid';
+  const choreIdeas = SEED_CHORES.filter(c => c.assignee === assigneeAge && !chores.some(existing => existing.title === c.title && existing.assigneeId === newAssignee));
+  const pickIdea = (idea) => {
+    setNewTitle(idea.title);
+    setNewIdea(idea);
   };
 
   useEffect(() => {
@@ -124,16 +122,24 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
 
   const addChore = (e) => {
     e.preventDefault();
-    if (!newTitle.trim()) return;
-    const assignee = config.canAssignOthers ? newAssignee : ageMode;
-    setChores(prev => [
-      ...prev,
-      { id: Date.now(), emoji: '📝', title: newTitle.trim(), assignee, points: assignee === 'adult' ? 0 : 15, done: false, steps: [] }
-    ]);
+    const title = newTitle.trim();
+    if (!title) return;
+    const assigneeId = config.canAssignOthers ? newAssignee : myMemberId;
+    // An idea's steps and picture only carry over if its name wasn't changed
+    const idea = newIdea?.title === title ? newIdea : null;
+    saveChore({
+      title,
+      assigneeId,
+      emoji: idea?.emoji || '📝',
+      points: idea?.points ?? (memberById[assigneeId]?.ageMode === 'adult' ? 0 : 15),
+      steps: idea?.steps || [],
+      guideImage: idea?.guideImage || null
+    });
     setNewTitle('');
+    setNewIdea(null);
     setIsAddOpen(false);
     // Make sure the new chore is visible under the current filter
-    if (memberFilter !== 'all' && memberFilter !== assignee) setMemberFilter('all');
+    if (memberFilter !== 'all' && memberFilter !== assigneeId) setMemberFilter('all');
   };
 
   const askHelper = async (text) => {
@@ -148,7 +154,7 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
     try {
       const res = await fetch('/api/ask', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
         body: JSON.stringify({ message: question, ageMode, sessionId })
       });
       const data = await res.json();
@@ -226,17 +232,17 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
 
             {config.seesWholeFamily && (
               <div style={styles.filterRow}>
-                {['all', ...MEMBERS].map(m => (
+                {[{ id: 'all', name: 'Everyone' }, ...members].map(m => (
                   <button
-                    key={m}
-                    onClick={() => setMemberFilter(m)}
+                    key={m.id}
+                    onClick={() => setMemberFilter(m.id)}
                     style={{
                       ...styles.chip,
-                      backgroundColor: memberFilter === m ? config.accent : '#1e293b',
-                      color: memberFilter === m ? '#0b1120' : '#cbd5e1'
+                      backgroundColor: memberFilter === m.id ? config.accent : '#1e293b',
+                      color: memberFilter === m.id ? '#0b1120' : '#cbd5e1'
                     }}
                   >
-                    {m === 'all' ? 'Everyone' : `${AGE_CONFIG[m].avatar} ${AGE_CONFIG[m].label}`}
+                    {m.ageMode ? `${AGE_CONFIG[m.ageMode].avatar} ${m.name}` : m.name}
                   </button>
                 ))}
                 <button
@@ -249,7 +255,12 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
             )}
 
             <div style={styles.choreList}>
-              {visibleChores.length === 0 && <p style={styles.muted}>No chores here yet.</p>}
+              {choreError && <p style={{ ...styles.muted, color: '#f87171' }}>{choreError}</p>}
+              {visibleChores.length === 0 && (
+                <p style={styles.muted}>
+                  {inFamily && config.canAssignOthers ? 'No chores yet. Tap "Add chore" to get the family started.' : 'No chores here yet.'}
+                </p>
+              )}
               {visibleChores.map(chore => (
                 <div
                   key={chore.id}
@@ -274,7 +285,11 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
                     </button>
                     {(config.seesWholeFamily || (config.reward && chore.points > 0)) && (
                       <div style={styles.choreMeta}>
-                        {config.seesWholeFamily && <span>{AGE_CONFIG[chore.assignee].avatar} {AGE_CONFIG[chore.assignee].label}</span>}
+                        {config.seesWholeFamily && (
+                          memberById[chore.assigneeId]
+                            ? <span>{AGE_CONFIG[memberById[chore.assigneeId].ageMode].avatar} {memberById[chore.assigneeId].name}</span>
+                            : <span>Unassigned</span>
+                        )}
                         {config.reward && chore.points > 0 && (
                           <span style={{ color: config.accent, fontWeight: 700 }}>+{chore.points} {config.reward.icon}</span>
                         )}
@@ -434,23 +449,41 @@ export default function HouseholdApp({ ageMode, sessionId, familyName, onSignOut
 
             <span style={{ ...styles.fieldLabel, marginTop: 16 }}>Assign to</span>
             <div style={styles.assigneeRow}>
-              {MEMBERS.map(m => (
+              {members.map(m => (
                 <button
-                  key={m}
+                  key={m.id}
                   type="button"
-                  onClick={() => setNewAssignee(m)}
-                  aria-pressed={newAssignee === m}
+                  onClick={() => setNewAssignee(m.id)}
+                  aria-pressed={newAssignee === m.id}
                   style={{
                     ...styles.assigneeOption,
-                    borderColor: newAssignee === m ? AGE_CONFIG[m].accent : '#334155',
-                    backgroundColor: newAssignee === m ? AGE_CONFIG[m].accentSoft : '#0f172a'
+                    borderColor: newAssignee === m.id ? AGE_CONFIG[m.ageMode].accent : '#334155',
+                    backgroundColor: newAssignee === m.id ? AGE_CONFIG[m.ageMode].accentSoft : '#0f172a'
                   }}
                 >
-                  <span style={{ fontSize: 22 }}>{AGE_CONFIG[m].avatar}</span>
-                  {AGE_CONFIG[m].label}
+                  <span style={{ fontSize: 22 }}>{AGE_CONFIG[m.ageMode].avatar}</span>
+                  <span style={styles.assigneeName}>{m.name}</span>
                 </button>
               ))}
             </div>
+
+            {choreIdeas.length > 0 && (
+              <>
+                <span style={{ ...styles.fieldLabel, marginTop: 16 }}>Ideas for {memberById[newAssignee]?.name}</span>
+                <div style={styles.ideaRow}>
+                  {choreIdeas.map(idea => (
+                    <button
+                      key={idea.id}
+                      type="button"
+                      onClick={() => pickIdea(idea)}
+                      style={{ ...styles.chip, borderColor: newIdea?.id === idea.id ? config.accent : '#334155', flexShrink: 0 }}
+                    >
+                      {idea.emoji} {idea.title}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
 
             <div style={styles.modalActions}>
               <button type="button" onClick={() => setIsAddOpen(false)} style={styles.ghostBtn}>Cancel</button>
@@ -808,6 +841,8 @@ const styles = {
     border: '1px solid #334155',
     borderRadius: '18px',
     padding: '20px',
+    maxHeight: '90dvh',
+    overflowY: 'auto',
     boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.6)',
   },
   // Bottom sheet on phones, so the form sits near the thumb and above the keyboard
@@ -828,8 +863,22 @@ const styles = {
   },
   assigneeRow: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(92px, 1fr))',
     gap: '8px',
+  },
+  assigneeName: {
+    maxWidth: '100%',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  // One swipeable row, so a long list of ideas doesn't push the buttons off a phone screen
+  ideaRow: {
+    display: 'flex',
+    gap: '6px',
+    overflowX: 'auto',
+    paddingBottom: '4px',
+    scrollbarWidth: 'thin',
   },
   assigneeOption: {
     display: 'flex',
