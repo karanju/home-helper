@@ -44,6 +44,13 @@ The app uses a strict, modular contract designed for the hackathon:
 - **PostMessage Contract**: The app listens for the `Widget.AgeGate.Result` event. When `status: "PASS"` is received with a `sessionId`, the app unlocks and transitions to the verified age mode.
 - **Backend Endpoint**: `POST /widget/generate-e2e-url` returns `{ url, sessionId }` and falls back seamlessly to the built-in interactive sandbox.
 
+### 👪 Families
+- Everyone creates their own account (email or username + password) and passes the k-ID age gate themselves. Their k-ID `sessionId` is stored on the account, so it follows them across devices.
+- A **k-ID verified adult** (k-ID adult verification, confirmed server-side) can create a family and becomes its admin. Admins invite people with one-time links (7-day expiry) and can make other verified adults admins. A family always keeps at least one admin.
+- People who join via an invite go through the standard k-ID flow: minors enter a parent's email for consent, and members who want to become admins verify their own age by email from the family panel.
+- `/api/ask` takes the age mode from the logged-in user's own k-ID session, not from the request.
+- Accounts and families live in `data/families.json` (gitignored). On Cloud Run this file is reset on every redeploy.
+
 ### 🎭 Live Demo & Judge Fallbacks (Fail-Safe)
 If sandbox credentials or Wi-Fi are flaky during the live stage pitch:
 1. **URL Query Param**: Add `?mock-age=kid`, `?mock-age=teen`, or `?mock-age=adult` to bypass verification instantly:
