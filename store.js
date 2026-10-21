@@ -6,7 +6,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'families.json');
 
-const EMPTY_DB = { users: {}, families: {}, invites: {}, authTokens: {} };
+// chores: familyId -> the family's shared chore list
+const EMPTY_DB = { users: {}, families: {}, invites: {}, authTokens: {}, chores: {} };
 
 function load() {
   try {

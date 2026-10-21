@@ -13,6 +13,7 @@ import { generateInstructions, parseInstructionsInput } from './ai/instructions.
 import { generateChorePoster, parseImageInput, ImageError, IMAGES_DIR, IMAGES_URL_PREFIX } from './ai/images.js';
 import { parseTaskChatInput, runTaskChat } from './ai/taskChat.js';
 import { parseParentAssistantInput, runParentAssistant } from './ai/parentAssistant.js';
+import { SEED_CHORES } from './client/src/household.js';
 import {
   hashPassword,
   verifyPassword,
@@ -641,6 +642,7 @@ app.delete('/api/families/members/:userId', requireAuth, (req, res) => {
   if (Object.keys(remaining).length === 0) {
     // Last one out: drop the family and its pending invites
     delete db.families[family.id];
+    delete db.chores[family.id];
     for (const [token, invite] of Object.entries(db.invites)) {
       if (invite.familyId === family.id) delete db.invites[token];
     }
@@ -656,6 +658,178 @@ app.delete('/api/families/members/:userId', requireAuth, (req, res) => {
   persist();
 
   res.json({ family: targetId === req.user.id ? null : publicFamily(db.families[family.id]) });
+});
+
+// 8. Shared family chores: one list per family in the local store, so every member sees the same board
+
+// The family's chores; a family's first read starts it with the built-in chores
+function familyChores(family) {
+  if (!db.chores[family.id]) {
+    db.chores[family.id] = structuredClone(SEED_CHORES);
+    persist();
+  }
+  return db.chores[family.id];
+}
+
+function saveFamilyChores(family, chores) {
+  db.chores[family.id] = chores;
+  persist();
+  return chores;
+}
+
+// Change one stored chore, if it is still on the board (it may have been deleted meanwhile)
+function updateStoredChore(familyId, choreId, updates) {
+  const chores = db.chores[familyId];
+  if (!chores?.some(c => c.id === choreId)) return;
+  db.chores[familyId] = chores.map(c => (c.id === choreId ? { ...c, ...updates } : c));
+  persist();
+}
+
+// Background AI for a new chore: steps for its age group, then a kid picture guide when a kid in the
+// family has AI Media Generation on. Results land on the stored chore; clients pick them up when they sync.
+async function generateChoreGuide(user, familyId, chore) {
+  try {
+    const { byAge } = await generateInstructions({ title: chore.title, assignees: [chore.assignee], notes: null });
+    const set = byAge[chore.assignee];
+    if (!set) throw new Error('Gemini did not return instructions');
+    updateStoredChore(familyId, chore.id, { steps: set.steps, tip: set.tip, safety: set.safety, instructionsStatus: 'ready' });
+
+    if (chore.assignee === 'kid' && await familyKidHasPermission(user, 'ai-media-generation')) {
+      updateStoredChore(familyId, chore.id, { posterStatus: 'pending' });
+      try {
+        const { imageUrl } = await generateChorePoster({ title: chore.title, steps: set.steps.slice(0, 5) });
+        updateStoredChore(familyId, chore.id, { posterUrl: imageUrl, posterStatus: 'ready' });
+      } catch (err) {
+        console.warn(`[AI] Poster for chore ${chore.id} failed: ${err.message}`);
+        updateStoredChore(familyId, chore.id, { posterStatus: 'failed' });
+      }
+    }
+  } catch (err) {
+    console.warn(`[AI] Instructions for chore ${chore.id} failed: ${err.message}`);
+    updateStoredChore(familyId, chore.id, { instructionsStatus: 'failed' });
+  }
+}
+
+// The caller's family and age mode for chore rules. Without a k-ID secret (local dev) everyone counts as an adult.
+async function choreContext(req, res) {
+  const family = getFamilyForUser(req.user.id);
+  if (!family) {
+    res.status(404).json({ error: 'Join or create a family to share chores.' });
+    return null;
+  }
+  const ageMode = (await resolveAgeMode(req.user)) ?? (process.env.KID_SECRET_KEY ? null : 'adult');
+  if (!ageMode) {
+    res.status(403).json({ error: 'Finish the k-ID age check to use the family chores.', status: 'LOCKED' });
+    return null;
+  }
+  return { family, ageMode };
+}
+
+app.get('/api/chores', requireAuth, async (req, res) => {
+  const ctx = await choreContext(req, res);
+  if (!ctx) return;
+  res.json({ chores: familyChores(ctx.family) });
+});
+
+// Same rules as the app: adults add chores for anyone, teens only for themselves, kids don't add chores
+app.post('/api/chores', requireAuth, async (req, res) => {
+  const ctx = await choreContext(req, res);
+  if (!ctx) return;
+
+  const title = String(req.body?.title || '').trim();
+  const { assignee, emoji, points } = req.body || {};
+  if (!title || title.length > 100) {
+    return res.status(400).json({ error: 'Please enter a chore title (up to 100 characters).' });
+  }
+  if (!AGE_MODES.includes(assignee)) {
+    return res.status(400).json({ error: `assignee must be one of ${AGE_MODES.join(', ')}.` });
+  }
+  if (!(ctx.ageMode === 'adult' || (ctx.ageMode === 'teen' && assignee === 'teen'))) {
+    return res.status(403).json({ error: 'You can\'t add chores for this family member.' });
+  }
+
+  const chore = {
+    id: randomUUID(),
+    emoji: typeof emoji === 'string' && emoji.trim() && emoji.trim().length <= 8 ? emoji.trim() : '📝',
+    title,
+    assignee,
+    points: assignee === 'adult' ? 0 : Number.isInteger(points) ? Math.min(Math.max(points, 0), 100) : 15,
+    done: false,
+    steps: [],
+    instructionsStatus: 'pending',
+    createdBy: req.user.id,
+    createdAt: new Date().toISOString()
+  };
+  saveFamilyChores(ctx.family, [...familyChores(ctx.family), chore]);
+  res.status(201).json({ chore });
+
+  generateChoreGuide(req.user, ctx.family.id, chore);
+});
+
+// Try the AI instructions again after a failure (Gemini is often busy). Same people who could add the chore.
+app.post('/api/chores/:id/instructions', requireAuth, async (req, res) => {
+  const ctx = await choreContext(req, res);
+  if (!ctx) return;
+
+  const chore = familyChores(ctx.family).find(c => String(c.id) === req.params.id);
+  if (!chore) {
+    return res.status(404).json({ error: 'That chore is no longer on the board.' });
+  }
+  if (!(ctx.ageMode === 'adult' || (ctx.ageMode === 'teen' && chore.assignee === 'teen'))) {
+    return res.status(403).json({ error: 'You can\'t change this chore.' });
+  }
+  if (chore.instructionsStatus === 'pending') {
+    return res.json({ chore });
+  }
+
+  updateStoredChore(ctx.family.id, chore.id, { instructionsStatus: 'pending', posterStatus: null });
+  res.json({ chore: { ...chore, instructionsStatus: 'pending', posterStatus: null } });
+
+  generateChoreGuide(req.user, ctx.family.id, chore);
+});
+
+// Ticking a chore off: adults can tick any chore, everyone else only their own age group's
+app.patch('/api/chores/:id', requireAuth, async (req, res) => {
+  const ctx = await choreContext(req, res);
+  if (!ctx) return;
+
+  const { done } = req.body || {};
+  if (typeof done !== 'boolean') {
+    return res.status(400).json({ error: 'done must be true or false.' });
+  }
+  const chores = familyChores(ctx.family);
+  const chore = chores.find(c => String(c.id) === req.params.id);
+  if (!chore) {
+    return res.status(404).json({ error: 'That chore is no longer on the board.' });
+  }
+  if (ctx.ageMode !== 'adult' && chore.assignee !== ctx.ageMode) {
+    return res.status(403).json({ error: 'That chore belongs to someone else.' });
+  }
+
+  const updated = { ...chore, done };
+  saveFamilyChores(ctx.family, chores.map(c => (c === chore ? updated : c)));
+  res.json({ chore: updated });
+});
+
+app.delete('/api/chores/:id', requireAuth, async (req, res) => {
+  const ctx = await choreContext(req, res);
+  if (!ctx) return;
+  if (ctx.ageMode !== 'adult') {
+    return res.status(403).json({ error: 'Only adults can remove chores.' });
+  }
+  const chores = familyChores(ctx.family);
+  saveFamilyChores(ctx.family, chores.filter(c => String(c.id) !== req.params.id));
+  res.json({ success: true });
+});
+
+// "New day": uncheck every chore for the family
+app.post('/api/chores/new-day', requireAuth, async (req, res) => {
+  const ctx = await choreContext(req, res);
+  if (!ctx) return;
+  if (ctx.ageMode !== 'adult') {
+    return res.status(403).json({ error: 'Only adults can start a new day.' });
+  }
+  res.json({ chores: saveFamilyChores(ctx.family, familyChores(ctx.family).map(c => ({ ...c, done: false }))) });
 });
 
 // 2. k-ID widget URL generation endpoint (Modular Placeholder Slot)
