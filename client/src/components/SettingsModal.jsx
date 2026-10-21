@@ -1,8 +1,10 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import { KidSettingsProvider, KidSettings } from '@k-id/core';
 import { X, Shield } from 'lucide-react';
+import { DemoModeContext } from './FeatureGate';
 
 export default function SettingsModal({ sessionId, isOpen, onClose }) {
+  const isDemo = useContext(DemoModeContext);
   if (!isOpen) return null;
 
   return (
@@ -23,7 +25,11 @@ export default function SettingsModal({ sessionId, isOpen, onClose }) {
         </p>
 
         <div style={styles.content}>
-          {sessionId ? (
+          {isDemo ? (
+            <p style={{ color: '#94a3b8', textAlign: 'center', padding: '20px' }}>
+              Permissions need a real k-ID session. Re-lock and pass the age gate to manage them.
+            </p>
+          ) : sessionId ? (
             <KidSettingsProvider sessionId={sessionId}>
               <KidSettings />
             </KidSettingsProvider>
@@ -83,8 +89,10 @@ const styles = {
     border: 'none',
     color: '#94a3b8',
     cursor: 'pointer',
-    padding: '4px',
-    borderRadius: '6px',
+    width: '40px',
+    height: '40px',
+    marginRight: '-10px',
+    borderRadius: '8px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

@@ -22,6 +22,13 @@ body {
   color: var(--text-main);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 /* App Container */
@@ -119,12 +126,31 @@ body {
   animation: fadeIn 0.3s ease forwards;
 }
 
-/* Mobile responsive constraints */
-@media (max-width: 640px) {
+/* Mobile: the demo bar wraps and sits just above the app's bottom tab bar */
+@media (max-width: 720px) {
   .demo-bar {
-    width: 95%;
-    overflow-x: auto;
-    justify-content: flex-start;
+    bottom: calc(64px + env(safe-area-inset-bottom));
+    width: calc(100% - 24px);
+    flex-wrap: wrap;
+    justify-content: center;
+    white-space: normal;
+    border-radius: 16px;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+
+  /* No tab bar on the age-gate screens, so sit at the bottom edge */
+  .app-container:not(:has(nav)) .demo-bar {
+    bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  /* The app header already has a Permissions button on phones */
+  .demo-bar span.label,
+  .demo-bar .demo-perm {
+    display: none;
+  }
+
+  .demo-btn {
     padding: 6px 10px;
   }
 }
