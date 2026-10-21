@@ -9,9 +9,11 @@
     "start": "node server.js",
     "dev:server": "node --watch server.js",
     "dev:client": "npm --prefix client run dev",
-    "dev": "node server.js & npm --prefix client run dev"
+    "dev": "node server.js & npm --prefix client run dev",
+    "test": "node --test ai/*.test.js"
   },
   "dependencies": {
+    "@heyputer/puter.js": "^2.6.4",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2"

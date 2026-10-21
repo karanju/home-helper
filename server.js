@@ -6,6 +6,13 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { randomUUID } from 'crypto';
 import { db, persist, getUser, findUserByLogin, getFamilyForUser, isFamilyAdmin } from './store.js';
+import { callGemini, candidateText, GeminiUnavailableError } from './ai/gemini.js';
+import { AGE_MODES, SYSTEM_PROMPTS, chatGenerationConfig } from './ai/prompts.js';
+import { InputError } from './ai/validate.js';
+import { generateInstructions, parseInstructionsInput } from './ai/instructions.js';
+import { generateChorePoster, parseImageInput, ImageError, IMAGES_DIR, IMAGES_URL_PREFIX } from './ai/images.js';
+import { parseTaskChatInput, runTaskChat } from './ai/taskChat.js';
+import { parseParentAssistantInput, runParentAssistant } from './ai/parentAssistant.js';
 import {
   hashPassword,
   verifyPassword,
@@ -33,76 +40,6 @@ app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
-
-// Cache for list of candidate Flash models
-let cachedFlashCandidates = [];
-let lastCandidatesFetch = 0;
-const CANDIDATES_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
-let lastWorkingModel = null;
-
-// Helper to retrieve and sort current Flash models dynamically
-async function getFlashModelCandidates(apiKey) {
-  const now = Date.now();
-  if (cachedFlashCandidates.length > 0 && (now - lastCandidatesFetch < CANDIDATES_CACHE_TTL)) {
-    return cachedFlashCandidates;
-  }
-
-  try {
-    const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-    const response = await fetch(listUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to list models: ${response.status} ${response.statusText}`);
-    }
-    const data = await response.json();
-    const models = data.models || [];
-
-    // Filter for text generation Flash models
-    const flashList = models
-      .filter(m => {
-        const name = (m.name || '').toLowerCase();
-        const supportsGen = (m.supportedGenerationMethods || []).includes('generateContent');
-        return supportsGen && name.includes('flash') && !name.includes('tts') && !name.includes('image');
-      })
-      .map(m => m.name.replace(/^models\//, ''));
-
-    // Priority ordering: latest flash models, falling back to flash-lite-latest and earlier versions
-    const preferredOrder = [
-      'gemini-3.8-flash',
-      'gemini-3.7-flash',
-      'gemini-3.6-flash',
-      'gemini-flash-latest',
-      'gemini-flash-lite-latest',
-      'gemini-3.5-flash',
-      'gemini-3.5-flash-lite',
-      'gemini-3.1-flash-lite',
-      'gemini-2.5-flash-lite',
-      'gemini-2.0-flash',
-      'gemini-1.5-flash'
-    ];
-
-    flashList.sort((a, b) => {
-      const idxA = preferredOrder.indexOf(a);
-      const idxB = preferredOrder.indexOf(b);
-      const rankA = idxA === -1 ? 999 : idxA;
-      const rankB = idxB === -1 ? 999 : idxB;
-      return rankA - rankB;
-    });
-
-    if (flashList.length > 0) {
-      if (lastWorkingModel && flashList.includes(lastWorkingModel)) {
-        flashList = [lastWorkingModel, ...flashList.filter(m => m !== lastWorkingModel)];
-      }
-      cachedFlashCandidates = flashList;
-      lastCandidatesFetch = now;
-      console.log(`[Gemini] Discovered ${flashList.length} dynamic Flash models. Active target: ${flashList[0]}`);
-      return cachedFlashCandidates;
-    }
-  } catch (err) {
-    console.warn(`[Gemini] Error fetching dynamic model list: ${err.message}`);
-  }
-
-  return ['gemini-flash-lite-latest', 'gemini-flash-latest', 'gemini-1.5-flash'];
-}
 
 // In-memory player accounts and claim store (no database per demo requirements)
 const playerAccounts = {
@@ -142,27 +79,33 @@ function deriveAgeMode(session) {
   return 'kid';
 }
 
-// sessionId -> { mode, fetchedAt }, so chat messages don't each hit k-ID
+// sessionId -> { mode, permissions, fetchedAt }, so chat messages don't each hit k-ID
 const ageModeCache = new Map();
 const AGE_MODE_CACHE_TTL = 5 * 60 * 1000;
 
-// The user's age mode from their own k-ID session, or null when it can't be determined
-async function resolveAgeMode(user) {
+// The user's age mode and k-ID permissions ({ name: enabled }) from their own session,
+// or null when it can't be determined
+async function resolveKidProfile(user) {
   if (!process.env.KID_SECRET_KEY || !user?.kidSessionId) return null;
 
   const cached = ageModeCache.get(user.kidSessionId);
-  if (cached && Date.now() - cached.fetchedAt < AGE_MODE_CACHE_TTL) return cached.mode;
+  if (cached && Date.now() - cached.fetchedAt < AGE_MODE_CACHE_TTL) return cached;
 
   try {
     const { ok, session } = await fetchKidSession(user.kidSessionId);
     if (!ok) return null;
-    const mode = deriveAgeMode(session);
-    ageModeCache.set(user.kidSessionId, { mode, fetchedAt: Date.now() });
-    return mode;
+    const permissions = Object.fromEntries((session?.permissions || []).map(p => [p.name, p.enabled === true]));
+    const profile = { mode: deriveAgeMode(session), permissions, fetchedAt: Date.now() };
+    ageModeCache.set(user.kidSessionId, profile);
+    return profile;
   } catch (err) {
     console.warn('[k-ID Server] Age mode lookup error:', err.message);
     return null;
   }
+}
+
+async function resolveAgeMode(user) {
+  return (await resolveKidProfile(user))?.mode ?? null;
 }
 
 function saveUser(user, updates) {
@@ -761,75 +704,80 @@ app.post('/widget/generate-e2e-url', async (req, res) => {
   }
 });
 
-// System prompts per age mode
-const SYSTEM_PROMPTS = {
-  kid: `You are "Buddy", a cheerful helper in a family chore app, talking to a child (ages 6-12).
-Rules:
-- Answer in at most 3 very short numbered steps or 1-3 short sentences. Simple words, friendly emojis.
-- Only kid-safe chores: tidying, making the bed, setting the table, packing a backpack, feeding a pet, sorting laundry.
-- NEVER suggest sharp knives, stoves, ovens, microwaves, boiling water, electrical tools, or cleaning chemicals. If a chore needs any of these, say it's a grown-up job or to ask a grown-up to help.
-- If the question isn't about chores or helping at home, kindly steer back to chores or suggest asking a grown-up.`,
+// Who is asking and at what age. Unlock nothing on the server until the logged-in user's own k-ID
+// session checks out, and take the age mode from that session rather than from the request body.
+// The demo bypass (mockBypass or a demo_ session id) keeps the body's age mode and allows every permission.
+async function resolveRequestAgeMode(req) {
+  const { ageMode = 'adult', sessionId, mockBypass } = req.body || {};
+  const asMode = (mode) => (AGE_MODES.includes(mode) ? mode : 'adult');
 
-  teen: `You are "Home Guide", a practical mentor in a family chore app, talking to a teenager (ages 13-17).
-Rules:
-- Explain chores and simple cooking as clear numbered steps (usually 4-7), with a short tip at the end if useful.
-- Add a brief "Safety:" line whenever heat, stoves, ovens, knives, or cleaning chemicals are involved (e.g. turn off the burner, never mix bleach with other cleaners).
-- No alcohol, no dangerous experiments. Encouraging, respectful, not preachy. Keep it under about 200 words.`,
+  if (mockBypass || (typeof sessionId === 'string' && sessionId.startsWith('demo_'))) {
+    return { ageMode: asMode(ageMode), can: () => true, user: null };
+  }
 
-  adult: `You are "Home Assistant", an expert household manager in a family chore app, talking to an adult.
-Rules:
-- Give thorough, well-structured answers: steps, time estimates, product/ingredient substitutions, and pro tips.
-- Help plan meals and groceries, schedule and split chores fairly across family members with age-appropriate suggestions for kids and teens.
-- Use short headings and bullets for longer answers.`
-};
+  const user = userFromRequest(req);
+  if (!user) {
+    return { error: { status: 401, body: { error: 'Please log in to continue.' } } };
+  }
+  if (!process.env.KID_SECRET_KEY) {
+    return { ageMode: asMode(ageMode), can: () => true, user };
+  }
+
+  const profile = await resolveKidProfile(user);
+  if (!profile) {
+    return {
+      error: {
+        status: 403,
+        body: { error: 'Access locked: This action requires a verified k-ID session with a completed server claim.', status: 'LOCKED' }
+      }
+    };
+  }
+  // k-ID permissions are parental controls for minors; adults can use every AI feature
+  return { ageMode: profile.mode, can: (name) => profile.mode === 'adult' || profile.permissions[name] === true, user };
+}
+
+// Whether any kid in the user's family has a k-ID permission on, read from each kid's own session
+async function familyKidHasPermission(user, name) {
+  const family = getFamilyForUser(user.id);
+  if (!family) return false;
+  const profiles = await Promise.all(Object.keys(family.members).map(userId => resolveKidProfile(getUser(userId))));
+  return profiles.some(profile => profile?.mode === 'kid' && profile.permissions[name] === true);
+}
+
+// Shared tail for the AI routes: bad input is a 400, a Gemini outage a 502
+function sendAiError(res, err, label) {
+  if (err instanceof InputError) return res.status(400).json({ error: err.message });
+  if (err instanceof ImageError) return res.status(err.status).json({ error: err.message });
+  if (err instanceof GeminiUnavailableError) return res.status(502).json({ error: err.message, details: err.details });
+  console.error(`Error in ${label}:`, err);
+  res.status(500).json({ error: 'Internal server error processing request', details: err.message });
+}
 
 // 3. Gemini API ask endpoint (gated by k-ID server-side claim verification)
 app.post('/api/ask', async (req, res) => {
   try {
-    const { message, ageMode = 'adult', sessionId, mockBypass } = req.body;
+    const { message } = req.body;
 
     if (!message || typeof message !== 'string' || message.trim() === '') {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
+    if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
         error: 'GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY in .env or Cloud Run environment variables.'
       });
     }
 
-    // k-ID Server-side lock enforcement:
-    // Unlock nothing on the server until the logged-in user's own k-ID session checks out,
-    // and take the age mode from that session rather than from the request body
-    let resolvedAgeMode = ageMode;
-    if (!mockBypass && !sessionId?.startsWith('demo_')) {
-      const user = userFromRequest(req);
-      if (!user) {
-        return res.status(401).json({ error: 'Please log in to continue.' });
-      }
-
-      if (process.env.KID_SECRET_KEY) {
-        const sessionMode = await resolveAgeMode(user);
-        if (!sessionMode) {
-          return res.status(403).json({
-            error: 'Access locked: This action requires a verified k-ID session with a completed server claim.',
-            status: 'LOCKED'
-          });
-        }
-        resolvedAgeMode = sessionMode;
-      }
+    const access = await resolveRequestAgeMode(req);
+    if (access.error) return res.status(access.error.status).json(access.error.body);
+    if (!access.can('ai-chat')) {
+      return res.status(403).json({ error: 'AI chat is turned off for this account.', code: 'PERMISSION_REQUIRED' });
     }
+    const validAgeMode = access.ageMode;
 
-    const validAgeMode = ['kid', 'teen', 'adult'].includes(resolvedAgeMode) ? resolvedAgeMode : 'adult';
-    const systemPrompt = SYSTEM_PROMPTS[validAgeMode];
-
-    // Discover dynamic Flash models list
-    const candidates = await getFlashModelCandidates(apiKey);
-
-    const geminiPayload = {
+    const { candidate, model } = await callGemini({
       systemInstruction: {
-        parts: [{ text: systemPrompt }]
+        parts: [{ text: SYSTEM_PROMPTS[validAgeMode] }]
       },
       contents: [
         {
@@ -837,63 +785,100 @@ app.post('/api/ask', async (req, res) => {
           parts: [{ text: message.trim() }]
         }
       ],
-      generationConfig: {
-        temperature: validAgeMode === 'kid' ? 0.3 : 0.7,
-        // Gemini's thinking tokens count against this cap; answer length is set by the prompts
-        maxOutputTokens: { kid: 1024, teen: 2048, adult: 4096 }[validAgeMode]
-      }
-    };
+      generationConfig: chatGenerationConfig(validAgeMode)
+    });
 
-    let replyText = null;
-    let modelUsed = null;
-    let lastError = null;
-
-    // Try candidates in priority order with graceful failover (e.g., if one returns 503 spike or 404)
-    for (const model of candidates) {
-      try {
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        const geminiRes = await fetch(geminiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(geminiPayload)
-        });
-
-        if (geminiRes.ok) {
-          const geminiData = await geminiRes.json();
-          replyText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (replyText) {
-            modelUsed = model;
-            lastWorkingModel = model;
-            break;
-          }
-        } else {
-          const errText = await geminiRes.text();
-          console.warn(`[Gemini] Candidate ${model} returned ${geminiRes.status}: ${errText.substring(0, 100)}`);
-          lastError = `${geminiRes.status}: ${errText}`;
-        }
-      } catch (err) {
-        console.warn(`[Gemini] Candidate ${model} fetch error: ${err.message}`);
-        lastError = err.message;
-      }
-    }
-
+    const replyText = candidateText(candidate);
     if (!replyText) {
-      return res.status(502).json({
-        error: 'All Gemini Flash models are currently busy or unavailable.',
-        details: lastError
-      });
+      throw new GeminiUnavailableError(`${model} returned no text`);
     }
 
     res.json({
       reply: replyText,
       ageMode: validAgeMode,
-      modelUsed: modelUsed
+      modelUsed: model
     });
   } catch (error) {
-    console.error('Error in /api/ask:', error);
-    res.status(500).json({ error: 'Internal server error processing request', details: error.message });
+    sendAiError(res, error, '/api/ask');
   }
 });
+
+// 4. AI chore instructions: one set of steps per assigned age group, generated in the background on add
+app.post('/api/ai/chore-instructions', async (req, res) => {
+  try {
+    const input = parseInstructionsInput(req.body);
+    const access = await resolveRequestAgeMode(req);
+    if (access.error) return res.status(access.error.status).json(access.error.body);
+
+    // Same rules as adding a chore: adults assign anyone, teens only themselves, kids don't add chores
+    const allowed = access.ageMode === 'adult' || (access.ageMode === 'teen' && input.assignees.every(mode => mode === 'teen'));
+    if (!allowed) {
+      return res.status(403).json({ error: 'You can\'t add chores for these family members.' });
+    }
+
+    const result = await generateInstructions(input);
+    if (Object.keys(result.byAge).length === 0) {
+      return res.status(502).json({ error: 'Could not write instructions right now.', failed: result.failed });
+    }
+    res.json(result);
+  } catch (err) {
+    sendAiError(res, err, '/api/ai/chore-instructions');
+  }
+});
+
+// 5. AI kid poster: a picture guide made from the kid steps, only when a kid in the family has AI Media Generation on
+app.post('/api/ai/chore-image', async (req, res) => {
+  try {
+    const input = parseImageInput(req.body);
+    const access = await resolveRequestAgeMode(req);
+    if (access.error) return res.status(access.error.status).json(access.error.body);
+
+    if (access.user && !(await familyKidHasPermission(access.user, 'ai-media-generation'))) {
+      return res.status(403).json({ error: 'No kid in this family has AI pictures turned on.', code: 'PERMISSION_REQUIRED' });
+    }
+
+    res.json(await generateChorePoster(input));
+  } catch (err) {
+    sendAiError(res, err, '/api/ai/chore-image');
+  }
+});
+
+// 6. AI task chat: questions and tips about one chore, only with the AI Chat permission
+app.post('/api/ai/task-chat', async (req, res) => {
+  try {
+    const input = parseTaskChatInput(req.body);
+    const access = await resolveRequestAgeMode(req);
+    if (access.error) return res.status(access.error.status).json(access.error.body);
+
+    if (!access.can('ai-chat')) {
+      return res.status(403).json({ error: 'AI chat is turned off for this account.', code: 'PERMISSION_REQUIRED' });
+    }
+
+    res.json(await runTaskChat(access.ageMode, input));
+  } catch (err) {
+    sendAiError(res, err, '/api/ai/task-chat');
+  }
+});
+
+// 7. AI parent assistant: adult chat that can propose chores; the client asks the parent before adding them
+app.post('/api/ai/parent-assistant', async (req, res) => {
+  try {
+    const input = parseParentAssistantInput(req.body);
+    const access = await resolveRequestAgeMode(req);
+    if (access.error) return res.status(access.error.status).json(access.error.body);
+
+    if (access.ageMode !== 'adult') {
+      return res.status(403).json({ error: 'Only adults can add chores from the chat.' });
+    }
+
+    res.json(await runParentAssistant(input));
+  } catch (err) {
+    sendAiError(res, err, '/api/ai/parent-assistant');
+  }
+});
+
+// Generated picture guides (data/images until Firebase Storage takes over)
+app.use(IMAGES_URL_PREFIX, express.static(IMAGES_DIR));
 
 // Serve static frontend files from client/dist
 const clientDistPath = path.join(__dirname, 'client', 'dist');
