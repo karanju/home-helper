@@ -178,3 +178,53 @@
   .kid-drawer-image { height: 220px; }
   .kid-task-drawer .kid-drawer-image-wide { height: min(42vh, 320px); }
 }
+
+/* Instruction drawer shared by all age modes in the household chore list. */
+.household-guide-backdrop { z-index: 11000; }
+.household-task-drawer { width: min(520px, 100%); }
+.household-guide-placeholder {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  font-size: 88px;
+  background: #fff;
+  border: 2px solid #e7dcfa;
+  border-radius: 20px;
+}
+.household-guide-empty { color: #43506e; font-size: 15px; line-height: 1.5; }
+
+/* Keep the shared household app cheerful and high-contrast for younger kids. */
+.household-app-kid {
+  background: linear-gradient(160deg, #fff7cc 0%, #e5f8ff 48%, #fff0f6 100%) !important;
+  color: #27345b !important;
+}
+.household-app-kid > header {
+  background: linear-gradient(105deg, #6741d9, #9b4de0 55%, #ec4899) !important;
+  border-bottom: 4px solid #ffd166 !important;
+}
+.household-app-kid > header h1,
+.household-app-kid > header p { color: #fff !important; }
+.household-app-kid > header p { opacity: .9; }
+.household-app-kid > main > section {
+  background: #fff !important;
+  border: 2px solid #e8d9ff !important;
+  border-radius: 24px !important;
+  box-shadow: 0 12px 30px rgba(94, 58, 155, .10);
+}
+.household-app-kid > main > section h2 { color: #5936a5 !important; }
+.household-app-kid .household-card {
+  background: #fff !important;
+  border: 2px solid #e8d9ff !important;
+  border-radius: 24px !important;
+  box-shadow: 0 12px 30px rgba(94, 58, 155, .10);
+}
+.household-app-kid .household-card h2 { color: #5936a5 !important; }
+.household-app-kid .household-chore-row {
+  background: #fff7e6 !important;
+  border-color: #ffd88a !important;
+  color: #39435e !important;
+}
+.household-app-kid .household-chore-title { color: #39435e !important; }
+.household-app-kid .household-chore-row.is-done { background: #e4fff2 !important; border-color: #7bddad !important; }
+.household-app-kid .household-chore-row > button:not(.household-chore-title) { border-color: #e2d8f2 !important; color: #6741d9 !important; }
+.household-app-kid .household-chore-meta { color: #64708b !important; }

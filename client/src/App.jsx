@@ -8,16 +8,16 @@ import {
   KidAgeGateFail,
   KidAgeGateProhibited,
   KidAgeGateError,
-  useKidSession
+  useKidSession,
+  useKidAgeGate
 } from '@k-id/core';
-import KidMode from './components/KidMode';
-import TeenMode from './components/TeenMode';
-import AdultMode from './components/AdultMode';
+import HouseholdApp from './components/HouseholdApp';
 import SettingsModal from './components/SettingsModal';
 import AuthScreen from './components/AuthScreen';
 import FamilyPanel from './components/FamilyPanel';
+import { DemoModeContext } from './components/FeatureGate';
 import { apiFetch, authHeaders, getAuthToken, setAuthToken } from './auth';
-import { Shield, Sparkles, Clock, AlertTriangle, XCircle, Sliders, Users, LogOut } from 'lucide-react';
+import { Shield, Clock, AlertTriangle, XCircle } from 'lucide-react';
 
 const K_ID_CONFIG = {
   publishableKey: 'kgp_test_ckcqom36ppaaaeytysmy4puoznneommzdbrfljfiheuwewt4aiulgxeqf3q77xy',
@@ -38,9 +38,37 @@ const K_ID_CONFIG = {
   }
 };
 
+// Brand header + centered card while the gate is running; full-width app once it passes
+function GateFrame({ children }) {
+  const { status } = useKidAgeGate();
+  if (status === 'pass') return <>{children}</>;
+
+  return (
+    <>
+      <header style={styles.topHeader}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <span style={{ fontSize: '26px' }}>🏠</span>
+          <span style={styles.brandTitle}>Home Helper</span>
+        </div>
+        <div style={styles.badge}>
+          <Shield size={14} color="#818cf8" />
+          <span>k-ID Verified Gate</span>
+        </div>
+      </header>
+      <main style={styles.gateMain}>
+        <div style={styles.gateWrapper}>{children}</div>
+      </main>
+    </>
+  );
+}
+
 // Inner component rendered once the player passes the k-ID age gate
-function VerifiedApp({ sessionId, forcedMode, serverAgeMode, onSignOut, onOpenSettings }) {
+function VerifiedApp({ sessionId, forcedMode, serverAgeMode, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
   const { session, ageVerification } = useKidSession();
+
+  useEffect(() => {
+    if (session) console.log('[k-ID] Session ageStatus:', session.ageStatus, 'ageVerification:', ageVerification);
+  }, [session?.ageStatus, ageVerification]);
 
   // The server's mode (read from this user's own k-ID session) wins; the SDK's view covers the moment before it loads
   let resolvedMode = forcedMode || serverAgeMode;
@@ -79,15 +107,15 @@ function VerifiedApp({ sessionId, forcedMode, serverAgeMode, onSignOut, onOpenSe
   });
 
   return (
-    <>
-      {resolvedMode === 'kid' ? (
-        <KidMode onSignOut={onSignOut} sessionId={sessionId} onOpenSettings={onOpenSettings} />
-      ) : resolvedMode === 'teen' ? (
-        <TeenMode onSignOut={onSignOut} sessionId={sessionId} onOpenSettings={onOpenSettings} />
-      ) : (
-        <AdultMode onSignOut={onSignOut} sessionId={sessionId} onOpenSettings={onOpenSettings} />
-      )}
-    </>
+    <HouseholdApp
+      key={resolvedMode}
+      ageMode={resolvedMode}
+      sessionId={sessionId}
+      familyName={familyName}
+      onSignOut={onSignOut}
+      onOpenSettings={onOpenSettings}
+      onOpenFamily={onOpenFamily}
+    />
   );
 }
 
@@ -230,70 +258,27 @@ export default function App() {
     window.location.href = '/';
   };
 
-  const handleForceMode = (mode) => {
-    console.log(`[k-ID] Switching to forced mode: ${mode}`);
-    // Navigate with query param to ensure fresh mode load
-    window.location.href = `/?mock-age=${mode}`;
-  };
-
-  // If ?mock-age bypass is active, render immediately to guarantee demo uptime
+  // If ?mock-age bypass is active, render immediately to guarantee demo uptime.
+  // There is no KidSessionProvider here; DemoModeContext tells the app to skip k-ID permission checks.
   if (forcedAgeMode) {
     return (
-      <KidCoreProvider
-        publishableKey={K_ID_CONFIG.publishableKey}
-        baseUrl={K_ID_CONFIG.baseUrl}
-        declare={K_ID_CONFIG.declare}
-      >
+      <DemoModeContext.Provider value={true}>
         <div className="app-container">
-          <VerifiedApp
-            sessionId={sessionId || 'demo_session'}
-            forcedMode={forcedAgeMode}
+          <HouseholdApp
+            key={forcedAgeMode}
+            ageMode={forcedAgeMode}
+            sessionId="demo_session"
             onSignOut={handleSignOut}
             onOpenSettings={() => setIsSettingsOpen(true)}
           />
 
           <SettingsModal
-            sessionId={sessionId || 'demo_session'}
+            sessionId="demo_session"
             isOpen={isSettingsOpen}
             onClose={() => setIsSettingsOpen(false)}
           />
-
-          {/* Floating Demo Bar */}
-          <div className="demo-bar">
-            <span className="label">Demo Mode:</span>
-            <button
-              className={`demo-btn ${forcedAgeMode === 'kid' ? 'active' : ''}`}
-              onClick={() => handleForceMode('kid')}
-            >
-              🧒 Kid
-            </button>
-            <button
-              className={`demo-btn ${forcedAgeMode === 'teen' ? 'active' : ''}`}
-              onClick={() => handleForceMode('teen')}
-            >
-              🧑 Teen
-            </button>
-            <button
-              className={`demo-btn ${forcedAgeMode === 'adult' ? 'active' : ''}`}
-              onClick={() => handleForceMode('adult')}
-            >
-              👤 Adult
-            </button>
-            <button
-              className="demo-btn"
-              onClick={() => setIsSettingsOpen(true)}
-            >
-              ⚙️ Permissions
-            </button>
-            <button
-              className="demo-btn reset"
-              onClick={handleSignOut}
-            >
-              🔒 Re-lock
-            </button>
-          </div>
         </div>
-      </KidCoreProvider>
+      </DemoModeContext.Provider>
     );
   }
 
@@ -337,31 +322,8 @@ export default function App() {
         onClaim={handleClaim}
       >
         <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#090d16', color: '#f8fafc' }}>
-          {/* Top Brand Header */}
-          <header style={styles.topHeader}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '26px' }}>🏠</span>
-              <span style={styles.brandTitle}>Home Helper</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <div style={styles.badge}>
-                <Shield size={14} color="#818cf8" />
-                <span>k-ID Verified Gate</span>
-              </div>
-              <button style={styles.headerBtn} onClick={() => setIsFamilyOpen(true)}>
-                <Users size={14} />
-                <span>{me.family ? me.family.name : 'Family'}</span>
-              </button>
-              <button style={styles.headerBtn} onClick={handleSignOut} title={`Signed in as ${me.user.displayName}`}>
-                <LogOut size={14} />
-                <span>Sign out</span>
-              </button>
-            </div>
-          </header>
-
           {/* k-ID All-In-One Age Gate Container */}
-          <main style={styles.gateMain}>
-            <div style={styles.gateWrapper}>
+          <GateFrame>
               <KidAgeGate>
                 {/* 1. Pending slot: Waiting on parent email consent */}
                 <KidAgeGatePending>
@@ -422,13 +384,14 @@ export default function App() {
                     sessionId={sessionId}
                     forcedMode={forcedAgeMode}
                     serverAgeMode={me.ageMode}
+                    familyName={me.family?.name}
                     onSignOut={handleSignOut}
                     onOpenSettings={() => setIsSettingsOpen(true)}
+                    onOpenFamily={() => setIsFamilyOpen(true)}
                   />
                 </KidAgeGatePass>
               </KidAgeGate>
-            </div>
-          </main>
+          </GateFrame>
 
           {/* Settings Modal */}
           <SettingsModal
@@ -459,13 +422,15 @@ const styles = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: '18px 32px',
+    padding: '14px 16px',
+    gap: '12px',
     borderBottom: '1px solid #1e293b',
     backgroundColor: '#0c1220',
   },
   brandTitle: {
     fontSize: '20px',
     fontWeight: '800',
+    whiteSpace: 'nowrap',
     background: 'linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%)',
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
@@ -483,31 +448,19 @@ const styles = {
     border: '1px solid rgba(99, 102, 241, 0.3)',
     padding: '6px 12px',
     borderRadius: '9999px',
-  },
-  headerBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    backgroundColor: '#131c2e',
-    border: '1px solid #1e293b',
-    color: '#e2e8f0',
-    padding: '6px 12px',
-    borderRadius: '9999px',
-    fontSize: '12px',
-    fontWeight: '600',
-    cursor: 'pointer',
+    whiteSpace: 'nowrap',
   },
   gateMain: {
     maxWidth: '520px',
-    margin: '36px auto',
-    padding: '0 20px 80px',
+    margin: '24px auto',
+    padding: '0 16px 80px',
     width: '100%',
   },
   gateWrapper: {
     backgroundColor: '#131c2e',
     border: '1px solid #1e293b',
     borderRadius: '18px',
-    padding: '24px',
+    padding: '12px',
     boxShadow: '0 20px 40px -15px rgba(0, 0, 0, 0.7)',
   },
   slotCard: {
