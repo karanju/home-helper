@@ -1,12 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Circle, HelpCircle, ListChecks, LogOut, Plus, Send, Shield, ShieldAlert, Sparkles, Trash2, Users, X } from 'lucide-react';
+import { CheckCircle2, Circle, HelpCircle, ListChecks, LogOut, Plus, RotateCcw, Send, Shield, ShieldAlert, Sparkles, Trash2, Users, X } from 'lucide-react';
 import { useFeature } from './FeatureGate';
-import { authHeaders } from '../auth';
+import { apiFetch, authHeaders } from '../auth';
 import { AGE_CONFIG, MEMBERS, SEED_CHORES } from '../household';
 import { useChores } from '../useChores';
 import './kid-mode.css';
 
 const MOBILE_QUERY = '(max-width: 720px)';
+// Matches the server: a guide still writing after this long was cut off and can be retried
+const GUIDE_STALE_MS = 5 * 60 * 1000;
+const TASK_PROMPTS = ['Give me a tip', 'How can I make it faster?', 'I\'m stuck on a step'];
+
+// Earlier turns for the AI routes: real exchanges only (no error notes), trimmed to the server's limits
+function toHistory(messages, max) {
+  return messages
+    .filter(m => !m.error)
+    .slice(-max)
+    .map(m => ({ role: m.role, text: m.text.slice(0, 1000) }));
+}
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
@@ -40,11 +51,14 @@ function RichText({ text }) {
 export default function HouseholdApp({ ageMode, sessionId, family, myUserId, familyName, onSignOut, onOpenSettings, onOpenFamily }) {
   const config = AGE_CONFIG[ageMode];
   const canUseAi = useFeature('ai-chat');
+  // Kids only see AI picture guides with AI Media Generation on; teens and adults always do
+  const canMakePictures = useFeature('ai-media-generation');
+  const showAiPictures = ageMode !== 'kid' || canMakePictures;
   const isMobile = useIsMobile();
 
   // In a family, chores are shared and assigned to real people; otherwise they're local, assigned to age groups
   const inFamily = Boolean(family && myUserId);
-  const { chores, error: choreError, addChore: saveChore, toggleChore, removeChore } = useChores({ inFamily });
+  const { chores, error: choreError, addChore: saveChore, toggleChore, removeChore, patchChore, refresh: refreshChores } = useChores({ inFamily });
   const members = inFamily
     ? family.members.map(m => ({ id: m.userId, name: m.displayName.split(' ')[0], ageMode: m.ageMode || 'kid' }))
     : MEMBERS.map(m => ({ id: m, name: AGE_CONFIG[m].label, ageMode: m }));
@@ -62,6 +76,12 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesRef = useRef(null);
+
+  // Task chat inside the drawer: one short conversation per chore
+  const [taskChats, setTaskChats] = useState({});
+  const [taskInput, setTaskInput] = useState('');
+  const [taskLoading, setTaskLoading] = useState(false);
+  const taskMessagesRef = useRef(null);
 
   // On phones the list and the helper are two tabs instead of two columns
   const [mobileTab, setMobileTab] = useState('chores');
@@ -83,6 +103,15 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
     const el = messagesRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, loading, mobileTab]);
+
+  useEffect(() => {
+    const el = taskMessagesRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [taskChats, taskLoading, selectedChoreId]);
+
+  useEffect(() => {
+    setTaskInput('');
+  }, [selectedChoreId]);
 
   const visibleChores = config.seesWholeFamily
     ? chores.filter(c => memberFilter === 'all' || c.assigneeId === memberFilter)
@@ -120,6 +149,53 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
     window.scrollTo({ top: 0 });
   };
 
+  // Local chores (demo, no family) get their AI guide from this browser. Family chores get it from the server,
+  // which writes it in the background; the next refresh brings it in.
+  const generateLocalGuide = async (chore) => {
+    const ageGroup = chore.assigneeId;
+    patchChore(chore.id, { instructionsStatus: 'pending', posterStatus: null });
+    try {
+      const data = await apiFetch('/api/ai/chore-instructions', {
+        method: 'POST',
+        body: { title: chore.title, assignees: [ageGroup], ageMode, sessionId }
+      });
+      const set = data.byAge[ageGroup];
+      if (!set) throw new Error('No instructions came back');
+      patchChore(chore.id, { steps: set.steps, tip: set.tip, safety: set.safety, instructionsStatus: 'ready' });
+
+      if (ageGroup === 'kid' && canMakePictures) {
+        patchChore(chore.id, { posterStatus: 'pending' });
+        try {
+          const image = await apiFetch('/api/ai/chore-image', {
+            method: 'POST',
+            body: { title: chore.title, steps: set.steps.slice(0, 5), ageMode, sessionId }
+          });
+          patchChore(chore.id, { posterUrl: image.imageUrl, posterStatus: 'ready' });
+        } catch {
+          patchChore(chore.id, { posterStatus: 'failed' });
+        }
+      }
+    } catch {
+      patchChore(chore.id, { instructionsStatus: 'failed' });
+    }
+  };
+
+  const createChore = async (draft) => {
+    const created = await saveChore(draft);
+    if (!inFamily && created && !created.steps?.length) generateLocalGuide(created);
+  };
+
+  const retryGuide = async (chore) => {
+    if (!inFamily) {
+      generateLocalGuide(chore);
+      return;
+    }
+    try {
+      await apiFetch(`/api/families/chores/${encodeURIComponent(chore.id)}/instructions`, { method: 'POST' });
+    } catch {}
+    refreshChores();
+  };
+
   const addChore = (e) => {
     e.preventDefault();
     const title = newTitle.trim();
@@ -127,7 +203,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
     const assigneeId = config.canAssignOthers ? newAssignee : myMemberId;
     // An idea's steps and picture only carry over if its name wasn't changed
     const idea = newIdea?.title === title ? newIdea : null;
-    saveChore({
+    createChore({
       title,
       assigneeId,
       emoji: idea?.emoji || '📝',
@@ -151,19 +227,74 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
     setMessages(next);
     setLoading(true);
 
+    // Adults talk to the parent assistant, which can also propose chores for the board
+    const isParent = ageMode === 'adult';
     try {
-      const res = await fetch('/api/ask', {
+      const res = await fetch(isParent ? '/api/ai/parent-assistant' : '/api/ask', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
-        body: JSON.stringify({ message: question, ageMode, sessionId })
+        body: JSON.stringify({ message: question, ageMode, sessionId, ...(isParent && { history: toHistory(messages, 20) }) })
       });
       const data = await res.json();
-      setMessages([...next, { role: 'assistant', text: res.ok ? data.reply : `⚠️ ${data.error || 'The helper is unavailable right now.'}` }]);
+      setMessages([
+        ...next,
+        res.ok
+          ? { role: 'assistant', text: data.reply, ...(data.proposedChores?.length && { proposedChores: data.proposedChores }) }
+          : { role: 'assistant', text: `⚠️ ${data.error || 'The helper is unavailable right now.'}`, error: true }
+      ]);
     } catch (err) {
-      setMessages([...next, { role: 'assistant', text: `⚠️ Network error: ${err.message}` }]);
+      setMessages([...next, { role: 'assistant', text: `⚠️ Network error: ${err.message}`, error: true }]);
     } finally {
       setLoading(false);
       if (mobileTabRef.current !== 'helper') setHelperUnread(true);
+    }
+  };
+
+  const resolveProposal = (index, status) =>
+    setMessages(prev => prev.map((msg, i) => (i === index ? { ...msg, proposalStatus: status } : msg)));
+
+  // A chore proposed for several people becomes one chore each, so everyone ticks off their own
+  const addProposedChores = (index, proposed) => {
+    proposed.forEach(p => p.assigneeIds.filter(id => memberById[id]).forEach(assigneeId => createChore({
+      title: p.title,
+      assigneeId,
+      emoji: p.emoji,
+      points: memberById[assigneeId].ageMode === 'adult' ? 0 : p.points
+    })));
+    resolveProposal(index, 'added');
+  };
+
+  const askAboutTask = async (text) => {
+    const chore = selectedChore;
+    const question = (text ?? taskInput).trim();
+    if (!chore || !question || taskLoading) return;
+
+    const previous = taskChats[chore.id] || [];
+    const appendTo = (msg) => setTaskChats(prev => ({ ...prev, [chore.id]: [...(prev[chore.id] || []), msg] }));
+    setTaskInput('');
+    appendTo({ role: 'user', text: question });
+    setTaskLoading(true);
+
+    try {
+      const res = await fetch('/api/ai/task-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+        body: JSON.stringify({
+          chore: { title: chore.title.slice(0, 100), steps: (chore.steps || []).slice(0, 10).map(step => step.slice(0, 300)) },
+          history: toHistory(previous, 10),
+          message: question,
+          ageMode,
+          sessionId
+        })
+      });
+      const data = await res.json();
+      appendTo(res.ok
+        ? { role: 'assistant', text: data.reply }
+        : { role: 'assistant', text: `⚠️ ${data.error || 'The helper is unavailable right now.'}`, error: true });
+    } catch (err) {
+      appendTo({ role: 'assistant', text: `⚠️ Network error: ${err.message}`, error: true });
+    } finally {
+      setTaskLoading(false);
     }
   };
 
@@ -362,6 +493,31 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                         }}
                       >
                         <RichText text={msg.text} />
+                        {msg.proposedChores && (
+                          <div style={styles.proposalCard}>
+                            {msg.proposedChores.map((p, i) => (
+                              <div key={i} style={styles.proposalRow}>
+                                <span style={{ fontSize: 18 }}>{p.emoji}</span>
+                                <span style={{ flex: 1, fontWeight: 600 }}>{p.title}</span>
+                                <span style={styles.muted}>
+                                  {p.assigneeIds.filter(id => memberById[id]).map(id => `${AGE_CONFIG[memberById[id].ageMode].avatar} ${memberById[id].name}`).join(' · ')}
+                                </span>
+                              </div>
+                            ))}
+                            {msg.proposalStatus ? (
+                              <div style={styles.muted}>{msg.proposalStatus === 'added' ? '✓ Added to the board' : 'Dismissed'}</div>
+                            ) : (
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <button onClick={() => addProposedChores(idx, msg.proposedChores)} style={{ ...accentButton, minHeight: 36, padding: '6px 12px' }}>
+                                  <Plus size={14} /> Add all
+                                </button>
+                                <button onClick={() => resolveProposal(idx, 'dismissed')} style={{ ...styles.ghostBtn, minHeight: 36 }}>
+                                  Dismiss
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -383,6 +539,7 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                     <input
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
+                      maxLength={1000}
                       placeholder={`Ask ${config.helperName}...`}
                       style={styles.input}
                       disabled={loading}
@@ -513,12 +670,23 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                 <X size={22} />
               </button>
             </div>
-            {selectedChore.guideImage ? (
+            {showAiPictures && selectedChore.posterUrl ? (
+              <img
+                className="kid-drawer-image kid-drawer-image-wide"
+                src={selectedChore.posterUrl}
+                alt={`Picture guide: ${selectedChore.title}`}
+              />
+            ) : selectedChore.guideImage ? (
               <img
                 className={`kid-drawer-image ${selectedChore.guideImage.endsWith('.png') ? 'kid-drawer-image-wide' : ''}`}
                 src={selectedChore.guideImage}
                 alt={`Illustration: ${selectedChore.title}`}
               />
+            ) : showAiPictures && selectedChore.posterStatus === 'pending' ? (
+              <div className="household-guide-placeholder household-guide-pending">
+                <span aria-hidden="true">🎨</span>
+                Drawing a picture guide...
+              </div>
             ) : (
               <div className="household-guide-placeholder" aria-hidden="true">{selectedChore.emoji}</div>
             )}
@@ -528,10 +696,61 @@ export default function HouseholdApp({ ageMode, sessionId, family, myUserId, fam
                   <span>{index + 1}</span>
                   <p>{step}</p>
                 </div>
-              )) : (
+              )) : selectedChore.instructionsStatus === 'pending' && !(selectedChore.updatedAt && Date.now() - Date.parse(selectedChore.updatedAt) > GUIDE_STALE_MS) ? (
+                <p className="household-guide-empty">✨ Writing step-by-step instructions... this can take a minute.</p>
+              ) : ['failed', 'pending'].includes(selectedChore.instructionsStatus) ? (
+                <div className="household-guide-failed">
+                  <p className="household-guide-empty">The instructions couldn't be written right now.</p>
+                  {(config.canAssignOthers || (config.canAddChores && selectedChore.assigneeId === myMemberId)) && (
+                    <button type="button" onClick={() => retryGuide(selectedChore)}>
+                      <RotateCcw size={14} /> Try again
+                    </button>
+                  )}
+                </div>
+              ) : (
                 <p className="household-guide-empty">No step-by-step guide has been added for this chore yet.</p>
               )}
+              {selectedChore.tip && <p className="household-guide-note">💡 {selectedChore.tip}</p>}
+              {selectedChore.safety && <p className="household-guide-note is-safety">⚠️ {selectedChore.safety}</p>}
             </div>
+            {canUseAi && (
+              <section className="household-task-chat" aria-label={`Ask ${config.helperName} about this task`}>
+                <h3>
+                  <Sparkles size={16} color={config.accent} style={{ verticalAlign: '-2px', marginRight: 6 }} />
+                  Ask {config.helperName} about this task
+                </h3>
+                {(taskChats[selectedChore.id]?.length > 0 || taskLoading) && (
+                  <div ref={taskMessagesRef} className="household-task-chat-messages">
+                    {(taskChats[selectedChore.id] || []).map((msg, idx) => (
+                      <div key={idx} className={`household-task-chat-bubble is-${msg.role}`}>
+                        <RichText text={msg.text} />
+                      </div>
+                    ))}
+                    {taskLoading && <div className="household-task-chat-thinking">{config.helperName} is thinking...</div>}
+                  </div>
+                )}
+                {!taskChats[selectedChore.id]?.length && (
+                  <div className="household-task-chat-chips">
+                    {TASK_PROMPTS.map(p => (
+                      <button key={p} type="button" onClick={() => askAboutTask(p)} disabled={taskLoading}>{p}</button>
+                    ))}
+                  </div>
+                )}
+                <form className="household-task-chat-form" onSubmit={(e) => { e.preventDefault(); askAboutTask(); }}>
+                  <input
+                    value={taskInput}
+                    onChange={(e) => setTaskInput(e.target.value)}
+                    maxLength={500}
+                    placeholder="Ask a question about this task..."
+                    disabled={taskLoading}
+                    enterKeyHint="send"
+                  />
+                  <button type="submit" style={{ backgroundColor: config.accent }} disabled={taskLoading || !taskInput.trim()} aria-label="Ask">
+                    <Send size={16} />
+                  </button>
+                </form>
+              </section>
+            )}
             <div className="kid-drawer-footer">
               {config.reward && selectedChore.points > 0 && (
                 <span className="kid-drawer-points">{config.reward.icon} Earn {selectedChore.points} {config.reward.unit}</span>
@@ -944,6 +1163,20 @@ const styles = {
     padding: '10px 12px',
     border: '1px solid',
     borderRadius: '10px',
+  },
+  proposalCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    marginTop: '10px',
+    paddingTop: '10px',
+    borderTop: '1px solid #334155',
+  },
+  proposalRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    flexWrap: 'wrap',
   },
   messages: {
     display: 'flex',

@@ -5,8 +5,14 @@ import { SEED_CHORES } from './household';
 const STORAGE_KEY = 'home_helper_chores_v1';
 const POLL_MS = 15000;
 
-// Chores used to store the assignee's age group as `assignee`; everything now uses `assigneeId`
-const normalize = (chore) => ({ ...chore, assigneeId: chore.assigneeId ?? chore.assignee });
+// Chores used to store the assignee's age group as `assignee`; everything now uses `assigneeId`.
+// A guide still being written when the page closed will never finish, so it is offered as a retry instead.
+const normalize = (chore) => ({
+  ...chore,
+  assigneeId: chore.assigneeId ?? chore.assignee,
+  ...(chore.instructionsStatus === 'pending' && { instructionsStatus: 'failed' }),
+  ...(chore.posterStatus === 'pending' && { posterStatus: 'failed' })
+});
 
 function loadLocalChores() {
   try {
@@ -32,9 +38,16 @@ function useLocalChores() {
   return {
     chores,
     error: null,
-    addChore: async (chore) => setChores(prev => [...prev, { id: Date.now(), done: false, steps: [], ...chore }]),
+    addChore: async (chore) => {
+      const created = { id: Date.now(), done: false, steps: [], ...chore };
+      setChores(prev => [...prev, created]);
+      return created;
+    },
     toggleChore: async (id) => setChores(prev => prev.map(c => (c.id === id ? { ...c, done: !c.done } : c))),
-    removeChore: async (id) => setChores(prev => prev.filter(c => c.id !== id))
+    removeChore: async (id) => setChores(prev => prev.filter(c => c.id !== id)),
+    // Local chores get their AI guide written into them by the browser
+    patchChore: (id, updates) => setChores(prev => prev.map(c => (c.id === id ? { ...c, ...updates } : c))),
+    refresh: async () => {}
   };
 }
 
@@ -81,13 +94,16 @@ function useFamilyChores(enabled) {
   return {
     chores,
     error,
+    refresh,
     addChore: async (chore) => {
       try {
         const { chore: created } = await apiFetch('/api/families/chores', { method: 'POST', body: chore });
         setChores(prev => [...prev, created]);
         setError(null);
+        return created;
       } catch (err) {
         setError(err.message);
+        return null;
       }
     },
     toggleChore: (id) => {
