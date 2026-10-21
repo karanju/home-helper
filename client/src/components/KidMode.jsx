@@ -16,6 +16,7 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
   const lifeSkills = [
     {
       title: 'How to Fold a T-Shirt in 3 Easy Steps',
+      image: '/images/fold-tshirt.svg',
       steps: [
         '1. Lay your shirt face down flat on your bed.',
         '2. Fold both sleeves toward the center.',
@@ -25,6 +26,7 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
     },
     {
       title: 'How to Pack Your Backpack',
+      image: '/images/pack-backpack.svg',
       steps: [
         '1. Heavy books go in the back pocket first.',
         '2. Put folders and notebooks in the middle.',
@@ -34,12 +36,23 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
     },
     {
       title: 'Super Soap Hand Washing Song',
+      image: '/images/wash-hands.svg',
       steps: [
         '1. Wet your hands and apply soap bubbles.',
         '2. Scrub palms, backs of hands, and between fingers.',
         '3. Hum "Happy Birthday" twice (20 seconds), then rinse!'
       ],
       emoji: '🧼'
+    },
+    {
+      title: 'How to Make Your Bed Cozy and Tidy',
+      image: '/images/make-bed.svg',
+      steps: [
+        '1. Pull your top sheet straight up to the head of the bed.',
+        '2. Smooth out the blanket so there are no big wrinkles.',
+        '3. Fluff your pillow and set it neatly at the top!'
+      ],
+      emoji: '🛏️'
     }
   ];
 
@@ -179,6 +192,15 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
           </div>
 
           <div style={styles.skillDetailBox}>
+            {/* Visual Learning Illustration */}
+            <div style={styles.skillImageCard}>
+              <img
+                src={lifeSkills[activeLifeSkill].image}
+                alt={lifeSkills[activeLifeSkill].title}
+                style={styles.skillImage}
+              />
+            </div>
+
             <h3 style={styles.skillDetailTitle}>
               {lifeSkills[activeLifeSkill].emoji} {lifeSkills[activeLifeSkill].title}
             </h3>
@@ -414,6 +436,24 @@ const styles = {
     borderRadius: '12px',
     padding: '18px',
     border: '1px solid #273552',
+  },
+  skillImageCard: {
+    width: '100%',
+    height: '180px',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    marginBottom: '16px',
+    backgroundColor: '#1e293b',
+    border: '1px solid #334155',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  skillImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover',
+    display: 'block',
   },
   skillDetailTitle: {
     fontSize: '15px',
