@@ -51,15 +51,32 @@ function VerifiedApp({ sessionId, forcedMode, serverAgeMode, onSignOut, onOpenSe
       else if (age < 18) resolvedMode = 'teen';
       else resolvedMode = 'adult';
     } else if (session?.ageStatus) {
-      // Same mapping as deriveAgeMode in server.js: unknown statuses get the most restrictive mode
-      const status = session.ageStatus.toUpperCase();
-      if (status.includes('ADULT')) resolvedMode = 'adult';
-      else if (status.includes('YOUTH') || status.includes('TEEN')) resolvedMode = 'teen';
-      else resolvedMode = 'kid';
+      const status = String(session.ageStatus).toUpperCase();
+      const ageValues = status.match(/\d+/g)?.map(Number) ?? [];
+      if (status.includes('CHILD') || status.includes('UNDER_13') || ageValues.some(age => age < 13)) {
+        resolvedMode = 'kid';
+      } else if (
+        status.includes('TEEN') ||
+        status.includes('ADOLESCENT') ||
+        status.includes('MINOR') ||
+        ageValues.some(age => age >= 13 && age < 18)
+      ) {
+        resolvedMode = 'teen';
+      } else if (status.includes('ADULT') || status.includes('18+') || status.includes('18_PLUS')) {
+        resolvedMode = 'adult';
+      } else {
+        resolvedMode = 'teen';
+      }
     } else {
-      resolvedMode = 'kid'; // Default fallback
+      resolvedMode = 'teen'; // Avoid granting adult mode without an adult age result
     }
   }
+
+  console.info('[Home Helper] Age-mode routing', {
+    verifiedAge: ageVerification?.verifiedAge ?? null,
+    ageStatus: session?.ageStatus ?? null,
+    resolvedMode,
+  });
 
   return (
     <>
@@ -199,27 +216,24 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
+    console.log('[k-ID] Signing out and resetting session...');
     try {
       await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch (err) {
       console.warn('[Auth] Logout request failed:', err.message);
     }
+    // The k-ID ids live on the account, so only the login token and session storage need clearing here
     setAuthToken(null);
-    setMe(null);
-    setIsSettingsOpen(false);
-    setIsFamilyOpen(false);
-    setForcedAgeMode(null);
+    sessionStorage.clear();
 
-    const url = new URL(window.location);
-    url.searchParams.delete('mock-age');
-    window.history.replaceState({}, '', url);
+    // Clean URL and perform a hard navigation to wipe in-memory device session
+    window.location.href = '/';
   };
 
   const handleForceMode = (mode) => {
-    setForcedAgeMode(mode);
-    const url = new URL(window.location);
-    url.searchParams.set('mock-age', mode);
-    window.history.replaceState({}, '', url);
+    console.log(`[k-ID] Switching to forced mode: ${mode}`);
+    // Navigate with query param to ensure fresh mode load
+    window.location.href = `/?mock-age=${mode}`;
   };
 
   // If ?mock-age bypass is active, render immediately to guarantee demo uptime
@@ -434,23 +448,6 @@ export default function App() {
             inviteToken={inviteToken}
             onInviteHandled={clearInvite}
           />
-
-          {/* Floating Demo Bar for judges and live testing */}
-          <div className="demo-bar">
-            <span className="label">Live Demo Fast-Track:</span>
-            <button className="demo-btn" onClick={() => handleForceMode('kid')}>
-              🧒 Kid
-            </button>
-            <button className="demo-btn" onClick={() => handleForceMode('teen')}>
-              🧑 Teen
-            </button>
-            <button className="demo-btn" onClick={() => handleForceMode('adult')}>
-              👤 Adult
-            </button>
-            <button className="demo-btn" onClick={() => setIsSettingsOpen(true)}>
-              ⚙️ Permissions
-            </button>
-          </div>
         </div>
       </KidSessionProvider>
     </KidCoreProvider>

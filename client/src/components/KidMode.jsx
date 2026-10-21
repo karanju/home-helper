@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { CheckCircle2, Circle, Star, Sparkles, Award, ShieldAlert, LogOut, Shield } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { CheckCircle2, Circle, Star, Sparkles, Award, ShieldAlert, LogOut, Shield, X } from 'lucide-react';
+import './kid-mode.css';
 
 export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
   const [chores, setChores] = useState([
@@ -9,39 +10,20 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
     { id: 4, text: '🧼 Wash hands with soap and water', points: 10, done: true },
     { id: 5, text: '🦷 Brush your teeth for 2 minutes', points: 10, done: false },
     { id: 6, text: '👟 Place shoes neatly by the door', points: 10, done: false },
+    { id: 7, text: '👕 Fold your clothes', points: 15, done: false },
   ]);
 
-  const [activeLifeSkill, setActiveLifeSkill] = useState(0);
+  const [activeChoreId, setActiveChoreId] = useState(null);
 
-  const lifeSkills = [
-    {
-      title: 'How to Fold a T-Shirt in 3 Easy Steps',
-      steps: [
-        '1. Lay your shirt face down flat on your bed.',
-        '2. Fold both sleeves toward the center.',
-        '3. Fold the bottom half up to the top. Nice and tidy!'
-      ],
-      emoji: '👕'
-    },
-    {
-      title: 'How to Pack Your Backpack',
-      steps: [
-        '1. Heavy books go in the back pocket first.',
-        '2. Put folders and notebooks in the middle.',
-        '3. Pencil case and snack box go in the front pocket!'
-      ],
-      emoji: '🎒'
-    },
-    {
-      title: 'Super Soap Hand Washing Song',
-      steps: [
-        '1. Wet your hands and apply soap bubbles.',
-        '2. Scrub palms, backs of hands, and between fingers.',
-        '3. Hum "Happy Birthday" twice (20 seconds), then rinse!'
-      ],
-      emoji: '🧼'
-    }
-  ];
+  const choreGuides = {
+    1: { title: 'Make your bed', image: '/images/make-bed.svg', steps: ['Pull the blanket up to the top of the bed.', 'Smooth it out with your hands.', 'Fluff your pillow and place it at the top.'] },
+    2: { title: 'Put your toys away', image: '/images/put-away-toys.svg', steps: ['Pick up one toy at a time.', 'Put each toy in its right bin or shelf.', 'Check the floor for any toys you missed.'] },
+    3: { title: 'Pack your backpack', image: '/images/pack-backpack.svg', steps: ['Check what you need for tomorrow.', 'Put books and folders in first.', 'Add your pencil case and any grownup-approved snack.'] },
+    4: { title: 'Wash your hands', image: '/images/wash-hands.svg', steps: ['Wet your hands and add soap.', 'Scrub palms, backs, and between fingers for 20 seconds.', 'Rinse well and dry your hands.'] },
+    5: { title: 'Brush your teeth', image: '/images/brush-teeth.svg', steps: ['Put a pea-sized dot of toothpaste on your brush.', 'Brush every side of your teeth gently for two minutes.', 'Spit, rinse your brush, and put it away.'] },
+    6: { title: 'Tidy your shoes', image: '/images/tidy-shoes.svg', steps: ['Find both shoes and match the pair.', 'Place them side by side by the door.', 'Keep the walking path clear.'] },
+    7: { title: 'Fold your clothes', image: '/images/fold-clothes.png', steps: ['Lay one shirt flat on a clean surface.', 'Fold each side toward the middle, then fold the bottom up.', 'Stack the folded clothes neatly.'] }
+  };
 
   const toggleChore = (id) => {
     setChores(prev =>
@@ -49,28 +31,39 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
     );
   };
 
+  useEffect(() => {
+    if (activeChoreId === null) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setActiveChoreId(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [activeChoreId]);
+
   const totalPoints = chores.filter(c => c.done).reduce((acc, c) => acc + c.points, 0);
   const totalPossible = chores.reduce((acc, c) => acc + c.points, 0);
+  const activeChore = chores.find(chore => chore.id === activeChoreId);
+  const activeChoreGuide = activeChore ? choreGuides[activeChore.id] : null;
 
   return (
-    <div style={styles.container}>
+    <div className="kid-mode" style={styles.container}>
       {/* Kid Header */}
-      <header style={styles.header}>
+      <header className="kid-header" style={styles.header}>
         <div style={styles.headerLeft}>
-          <div style={styles.avatar}>🧒</div>
+          <div className="kid-avatar" style={styles.avatar}>🧒</div>
           <div>
             <div style={styles.titleRow}>
-              <h1 style={styles.title}>Kid Zone</h1>
-              <span style={styles.verifiedTag}>🛡️ k-ID Verified Under 13</span>
+              <h1 className="kid-title" style={styles.title}>Kid Zone</h1>
+              <span className="kid-verified-tag" style={styles.verifiedTag}>🛡️ k-ID Verified Under 13</span>
             </div>
             <p style={styles.subtitle}>Welcome back, Super Helper!</p>
           </div>
         </div>
 
-        <div style={styles.headerRight}>
-          <div style={styles.starBadge}>
+        <div className="kid-header-right" style={styles.headerRight}>
+          <div className="kid-star-badge" style={styles.starBadge}>
             <Star fill="#f59e0b" color="#f59e0b" size={20} />
-            <span style={styles.starCount}>{totalPoints} Stars</span>
+            <span className="kid-star-count" style={styles.starCount}>{totalPoints} Stars</span>
           </div>
           {onOpenSettings && (
             <button onClick={onOpenSettings} style={styles.settingsBtn} title="View k-ID Permissions">
@@ -86,29 +79,30 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
       </header>
 
       {/* Safety Notice Card */}
-      <div style={styles.safetyCard}>
+      <div className="kid-safety" style={styles.safetyCard}>
         <ShieldAlert size={20} color="#10b981" />
-        <span style={styles.safetyText}>
+        <span className="kid-safety-text" style={styles.safetyText}>
           <strong>Safe Space Active:</strong> Open chat & sharp tools are disabled. Everything here is kid-safe and approved for your home!
         </span>
       </div>
 
-      <div style={styles.contentGrid}>
+      <div className="kid-content-grid" style={styles.contentGrid}>
         {/* Chores Section */}
-        <section style={styles.card}>
+        <section className="kid-card" style={styles.card}>
           <div style={styles.cardHeader}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Award color="#f59e0b" size={22} />
-              <h2 style={styles.cardTitle}>Daily Chore Quests</h2>
+              <h2 className="kid-card-title" style={styles.cardTitle}>Daily Chore Quests</h2>
             </div>
-            <span style={styles.progressText}>
+            <span className="kid-progress-text" style={styles.progressText}>
               {chores.filter(c => c.done).length} / {chores.length} Completed
             </span>
           </div>
 
           {/* Progress Bar */}
-          <div style={styles.progressBarTrack}>
+          <div className="kid-progress-track" style={styles.progressBarTrack}>
             <div
+              className="kid-progress-fill"
               style={{
                 ...styles.progressBarFill,
                 width: `${(totalPoints / totalPossible) * 100}%`
@@ -116,24 +110,30 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
             />
           </div>
 
-          <div style={styles.choreList}>
+          <div className="kid-chore-list" style={styles.choreList}>
             {chores.map(chore => (
-              <div
+              <button
+                type="button"
                 key={chore.id}
-                onClick={() => toggleChore(chore.id)}
+                className={"kid-chore " + (chore.done ? "is-done" : "")}
+                aria-label={"Open instructions: " + chore.text}
+                onClick={() => setActiveChoreId(chore.id)}
                 style={{
                   ...styles.choreItem,
+                  width: '100%',
+                  textAlign: 'left',
                   backgroundColor: chore.done ? '#1e293b' : '#1a233a',
                   borderColor: chore.done ? '#10b981' : '#334155'
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   {chore.done ? (
-                    <CheckCircle2 color="#10b981" size={24} />
+                    <CheckCircle2 className="kid-chore-check" color="#10b981" size={24} />
                   ) : (
-                    <Circle color="#64748b" size={24} />
+                    <Circle className="kid-chore-check" color="#64748b" size={24} />
                   )}
                   <span
+                    className="kid-chore-text"
                     style={{
                       ...styles.choreText,
                       textDecoration: chore.done ? 'line-through' : 'none',
@@ -143,56 +143,70 @@ export default function KidMode({ onSignOut, sessionId, onOpenSettings }) {
                     {chore.text}
                   </span>
                 </div>
-                <span style={styles.chorePoints}>+{chore.points} ⭐</span>
-              </div>
+                <span className="kid-chore-points" style={styles.chorePoints}>+{chore.points} ⭐</span>
+              </button>
             ))}
           </div>
 
           {totalPoints === totalPossible && (
-            <div style={styles.celebrationBox}>
+            <div className="kid-celebration" style={styles.celebrationBox}>
               <Sparkles size={20} color="#fbbf24" />
               <span>🎉 Incredible job! All daily quests are finished!</span>
             </div>
           )}
         </section>
 
-        {/* Life Skills Guide */}
-        <section style={styles.card}>
-          <div style={styles.cardHeader}>
-            <h2 style={styles.cardTitle}>🌟 Helpful Life Skills</h2>
-          </div>
+      </div>
 
-          <div style={styles.tabsRow}>
-            {lifeSkills.map((skill, idx) => (
-              <button
-                key={idx}
-                onClick={() => setActiveLifeSkill(idx)}
-                style={{
-                  ...styles.tabBtn,
-                  backgroundColor: activeLifeSkill === idx ? '#3b82f6' : '#1e293b',
-                  color: activeLifeSkill === idx ? '#ffffff' : '#94a3b8'
-                }}
-              >
-                <span>{skill.emoji}</span> {skill.title.split(' ')[2] || 'Skill'}
+      {activeChore && activeChoreGuide && (
+        <div className="kid-drawer-backdrop" onClick={() => setActiveChoreId(null)}>
+          <aside
+            className="kid-task-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kid-task-title"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="kid-drawer-header">
+              <div>
+                <span className="kid-drawer-eyebrow">YOUR TASK GUIDE</span>
+                <h2 id="kid-task-title">{activeChoreGuide.title}</h2>
+              </div>
+              <button className="kid-drawer-close" type="button" aria-label="Close instructions" onClick={() => setActiveChoreId(null)}>
+                <X size={22} />
               </button>
-            ))}
-          </div>
-
-          <div style={styles.skillDetailBox}>
-            <h3 style={styles.skillDetailTitle}>
-              {lifeSkills[activeLifeSkill].emoji} {lifeSkills[activeLifeSkill].title}
-            </h3>
-            <div style={styles.stepsList}>
-              {lifeSkills[activeLifeSkill].steps.map((step, idx) => (
-                <div key={idx} style={styles.stepRow}>
-                  <span style={styles.stepNumberBadge}>{idx + 1}</span>
-                  <p style={styles.stepContent}>{step.replace(/^\d+\.\s*/, '')}</p>
+            </div>
+            <img className={"kid-drawer-image " + (activeChore.id === 7 ? "kid-drawer-image-wide" : "")} src={activeChoreGuide.image} alt={"Illustration: " + activeChoreGuide.title} />
+            <div className="kid-drawer-steps">
+              {activeChoreGuide.steps.map((step, index) => (
+                <div className="kid-drawer-step" key={step}>
+                  <span>{index + 1}</span>
+                  <p>{step}</p>
                 </div>
               ))}
             </div>
-          </div>
-        </section>
-      </div>
+            <div className="kid-drawer-footer">
+              <span className="kid-drawer-points">⭐ Earn {activeChore.points} stars</span>
+              {activeChore.done ? (
+                <button className="kid-complete-button is-done" type="button" onClick={() => setActiveChoreId(null)}>
+                  Done for today ✓
+                </button>
+              ) : (
+                <button
+                  className="kid-complete-button"
+                  type="button"
+                  onClick={() => {
+                    toggleChore(activeChore.id);
+                    setActiveChoreId(null);
+                  }}
+                >
+                  Mark task complete ⭐
+                </button>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }
@@ -414,6 +428,24 @@ const styles = {
     borderRadius: '12px',
     padding: '18px',
     border: '1px solid #273552',
+  },
+  skillImageCard: {
+    width: '100%',
+    height: '320px',
+    borderRadius: '12px',
+    overflow: 'hidden',
+    marginBottom: '16px',
+    backgroundColor: '#1e293b',
+    border: '1px solid #334155',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  skillImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+    display: 'block',
   },
   skillDetailTitle: {
     fontSize: '15px',

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="handGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fcd34d"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="bubbleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e0f2fe"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+    <filter id="glow3" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#38bdf8" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Background card -->
+  <rect width="400" height="300" rx="20" fill="url(#bgGrad3)"/>
+
+  <!-- Water Faucet / Stream -->
+  <path d="M 200 45 L 200 110" stroke="#38bdf8" stroke-width="8" stroke-linecap="round" opacity="0.8"/>
+  <ellipse cx="200" cy="115" rx="6" ry="12" fill="#7dd3fc"/>
+
+  <!-- Hands Scrubbing Center Group -->
+  <g filter="url(#glow3)">
+    <!-- Left Hand Palm & Fingers -->
+    <path d="M 140 185 C 130 165, 140 135, 165 140 C 175 142, 185 155, 190 170 L 165 195 Z" fill="url(#handGrad1)"/>
+    <path d="M 155 138 C 160 120, 175 125, 175 140" stroke="#d97706" stroke-width="4" stroke-linecap="round"/>
+    <path d="M 168 135 C 175 118, 188 122, 185 140" stroke="#d97706" stroke-width="4" stroke-linecap="round"/>
+    <path d="M 180 138 C 188 124, 198 130, 195 148" stroke="#d97706" stroke-width="4" stroke-linecap="round"/>
+
+    <!-- Right Hand Palm & Fingers Interlocking -->
+    <path d="M 260 185 C 270 165, 260 135, 235 140 C 225 142, 215 155, 210 170 L 235 195 Z" fill="url(#handGrad1)"/>
+    <path d="M 245 138 C 240 120, 225 125, 225 140" stroke="#d97706" stroke-width="4" stroke-linecap="round"/>
+    <path d="M 232 135 C 225 118, 212 122, 215 140" stroke="#d97706" stroke-width="4" stroke-linecap="round"/>
+    <path d="M 220 138 C 212 124, 202 130, 205 148" stroke="#d97706" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <!-- Fluffy Soap Bubbles (Cluster in Center) -->
+  <g opacity="0.9">
+    <circle cx="200" cy="155" r="22" fill="url(#bubbleGrad)" opacity="0.75"/>
+    <circle cx="194" cy="148" r="6" fill="#ffffff" opacity="0.8"/>
+
+    <circle cx="178" cy="170" r="16" fill="url(#bubbleGrad)" opacity="0.75"/>
+    <circle cx="173" cy="165" r="4" fill="#ffffff" opacity="0.8"/>
+
+    <circle cx="222" cy="170" r="16" fill="url(#bubbleGrad)" opacity="0.75"/>
+    <circle cx="218" cy="165" r="4" fill="#ffffff" opacity="0.8"/>
+
+    <circle cx="200" cy="182" r="14" fill="url(#bubbleGrad)" opacity="0.75"/>
+
+    <!-- Floating stray bubbles -->
+    <circle cx="140" cy="120" r="10" fill="url(#bubbleGrad)" opacity="0.6"/>
+    <circle cx="260" cy="115" r="12" fill="url(#bubbleGrad)" opacity="0.6"/>
+    <circle cx="275" cy="150" r="8" fill="url(#bubbleGrad)" opacity="0.6"/>
+    <circle cx="125" cy="160" r="9" fill="url(#bubbleGrad)" opacity="0.6"/>
+  </g>
+
+  <!-- Water Splash Drops -->
+  <circle cx="170" cy="215" r="4" fill="#38bdf8"/>
+  <circle cx="230" cy="215" r="4" fill="#38bdf8"/>
+  <circle cx="200" cy="225" r="5" fill="#38bdf8"/>
+
+  <!-- 20-Second Clean Timer Badge -->
+  <rect x="135" y="240" width="130" height="28" rx="14" fill="#0284c7" opacity="0.3"/>
+  <text x="200" y="259" fill="#7dd3fc" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="12" font-weight="700" text-anchor="middle" letter-spacing="0.5">⏱️ 20 SECONDS SCRUB</text>
+
+  <!-- Sparkles -->
+  <g fill="#fbbf24">
+    <path d="M 85 75 Q 85 85 75 85 Q 85 85 85 95 Q 85 85 95 85 Q 85 85 85 75 Z"/>
+    <path d="M 315 70 Q 315 80 305 80 Q 315 80 315 90 Q 315 80 325 80 Q 315 80 315 70 Z"/>
+  </g>
+</svg>
+

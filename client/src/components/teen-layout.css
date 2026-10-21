@@ -1,0 +1,149 @@
+/* Teen portal: wider, responsive website layout */
+.teen-site {
+  width: 100%;
+  padding-bottom: 48px !important;
+}
+
+.teen-site .teen-header {
+  width: 100%;
+  flex-wrap: wrap !important;
+  gap: 20px 32px;
+  padding: 24px clamp(24px, 5vw, 80px) !important;
+}
+
+.teen-site .teen-header-left {
+  flex: 1 1 520px;
+  min-width: 0;
+}
+
+.teen-site .teen-title-row {
+  flex-wrap: wrap;
+  gap: 8px 14px !important;
+}
+
+.teen-site .teen-title {
+  font-size: clamp(26px, 3vw, 38px) !important;
+  line-height: 1.12;
+}
+
+.teen-site .teen-subtitle {
+  font-size: 15px !important;
+}
+
+.teen-site .teen-header-actions {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+}
+
+.teen-site .teen-guardrails {
+  width: min(1440px, calc(100% - 64px)) !important;
+  max-width: 1440px !important;
+  margin: 24px auto 0 !important;
+  padding: 16px 22px !important;
+}
+
+.teen-site .teen-safety-badges {
+  gap: 8px;
+}
+
+.teen-site .teen-main-layout {
+  width: min(1440px, calc(100% - 64px)) !important;
+  max-width: 1440px !important;
+  margin: 28px auto 0 !important;
+  padding: 0 !important;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr) !important;
+  gap: 28px !important;
+  align-items: start;
+}
+
+.teen-site .teen-sidebar,
+.teen-site .teen-chat-column {
+  min-width: 0;
+}
+
+.teen-site .teen-chat-column {
+  width: 100%;
+}
+
+.teen-site .teen-chat-column > section {
+  width: 100%;
+  min-width: 0;
+  height: min(760px, calc(100vh - 250px)) !important;
+  min-height: 540px;
+}
+
+.teen-site .teen-chat-column h2 {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .teen-site .teen-main-layout {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .teen-site .teen-sidebar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .teen-site .teen-sidebar > h2,
+  .teen-site .teen-sidebar > h3,
+  .teen-site .teen-quick-prompts-list {
+    grid-column: 1 / -1;
+  }
+
+  .teen-site .teen-quick-prompts-list {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .teen-site .teen-chat-column > section {
+    height: 680px !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .teen-site .teen-header {
+    align-items: flex-start !important;
+    padding: 20px 18px !important;
+  }
+
+  .teen-site .teen-header-left {
+    flex-basis: 100%;
+  }
+
+  .teen-site .teen-avatar {
+    flex-shrink: 0;
+  }
+
+  .teen-site .teen-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .teen-site .teen-guardrails,
+  .teen-site .teen-main-layout {
+    width: calc(100% - 32px) !important;
+  }
+
+  .teen-site .teen-guardrails {
+    align-items: flex-start !important;
+  }
+
+  .teen-site .teen-safety-badges,
+  .teen-site .teen-quick-prompts-list {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    width: 100%;
+  }
+
+  .teen-site .teen-sidebar {
+    display: flex;
+  }
+
+  .teen-site .teen-chat-column > section {
+    height: 70vh !important;
+    min-height: 500px;
+  }
+}

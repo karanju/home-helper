@@ -1,0 +1,180 @@
+/* Bright, playful Kid Mode colors and task instructions drawer */
+.kid-mode {
+  color: #27345b !important;
+  background: linear-gradient(160deg, #fff7cc 0%, #e5f8ff 48%, #fff0f6 100%) !important;
+  padding-bottom: 48px !important;
+}
+.kid-mode .kid-header {
+  background: linear-gradient(105deg, #6741d9, #9b4de0 55%, #ec4899) !important;
+  border-bottom: 4px solid #ffd166 !important;
+  padding: 20px clamp(20px, 5vw, 72px) !important;
+}
+.kid-mode .kid-avatar {
+  background: #fff !important;
+  border: 4px solid #ffd166 !important;
+  box-shadow: 0 6px 0 rgba(40, 30, 90, .16);
+}
+.kid-mode .kid-title { color: #fff !important; font-size: 28px !important; }
+.kid-mode .kid-subtitle { color: #f3e8ff !important; }
+.kid-mode .kid-verified-tag {
+  color: #075e54 !important;
+  background: #b7f7d4 !important;
+  border-color: #62d6a3 !important;
+}
+.kid-mode .kid-star-badge {
+  background: #fff2a6 !important;
+  border: 2px solid #f5ad21 !important;
+  box-shadow: 0 4px 0 rgba(100, 65, 0, .12);
+}
+.kid-mode .kid-star-count { color: #7c4700 !important; }
+.kid-mode .kid-safety {
+  width: min(1200px, calc(100% - 40px)) !important;
+  max-width: 1200px !important;
+  padding: 14px 20px !important;
+  background: #d8fff0 !important;
+  border: 2px solid #5ed6ab !important;
+  color: #116451 !important;
+  box-shadow: 0 5px 0 rgba(21, 125, 92, .08);
+}
+.kid-mode .kid-safety svg,
+.kid-mode .kid-safety strong { color: #13845f !important; }
+.kid-mode .kid-safety-text { color: #1b6857 !important; }
+.kid-mode .kid-content-grid {
+  width: min(1400px, 100%) !important;
+  max-width: 1400px !important;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)) !important;
+  gap: 24px !important;
+  padding: 0 clamp(16px, 3vw, 36px) !important;
+  margin: 24px auto !important;
+}
+.kid-mode .kid-card {
+  background: #fff !important;
+  border: 2px solid #e8d9ff !important;
+  border-radius: 24px !important;
+  box-shadow: 0 12px 30px rgba(94, 58, 155, .10);
+  padding: clamp(18px, 2.5vw, 30px) !important;
+}
+.kid-mode .kid-card-title { color: #5936a5 !important; font-size: 21px !important; }
+.kid-mode .kid-progress-text { color: #64708b !important; }
+.kid-mode .kid-progress-track { background: #eee8ff !important; height: 12px !important; }
+.kid-mode .kid-progress-fill { background: linear-gradient(90deg, #ff8f5a, #ffc857, #63d6a5) !important; }
+.kid-mode .kid-chore-list { gap: 12px !important; }
+.kid-mode .kid-chore {
+  display: flex;
+  min-height: 64px;
+  background: #fff7e6 !important;
+  border: 2px solid #ffd88a !important;
+  border-radius: 16px !important;
+  box-shadow: 0 4px 0 rgba(194, 126, 30, .12);
+  color: #39435e !important;
+  cursor: pointer;
+  font: inherit;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.kid-mode .kid-chore:hover { transform: translateY(-2px); box-shadow: 0 7px 0 rgba(194, 126, 30, .15); }
+.kid-mode .kid-chore.is-done { background: #e4fff2 !important; border-color: #7bddad !important; }
+.kid-mode .kid-chore-text { color: #39435e !important; }
+.kid-mode .kid-chore.is-done .kid-chore-text { color: #718078 !important; }
+.kid-mode .kid-chore-points { color: #bd6b00 !important; white-space: nowrap; }
+.kid-mode .kid-chore-check { color: #42b883 !important; flex-shrink: 0; }
+.kid-mode .kid-celebration {
+  background: #fff2b8 !important;
+  border-color: #ffc857 !important;
+  color: #805000 !important;
+}
+
+.kid-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(33, 29, 62, .48);
+  backdrop-filter: blur(3px);
+  animation: kid-backdrop-in .18s ease-out;
+}
+.kid-task-drawer {
+  width: min(520px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 28px;
+  background: linear-gradient(160deg, #fffdf5, #f4f0ff 70%, #effbff);
+  box-shadow: -18px 0 50px rgba(38, 26, 82, .22);
+  animation: kid-drawer-in .24s cubic-bezier(.2,.8,.2,1);
+}
+.kid-drawer-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.kid-drawer-eyebrow { color: #8960c8; font-size: 11px; font-weight: 800; letter-spacing: 1.3px; }
+.kid-drawer-header h2 { margin-top: 6px; color: #34235d; font-size: 26px; line-height: 1.15; }
+.kid-drawer-close {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  color: #5f4b85;
+  background: #fff;
+  border: 1px solid #ded3f4;
+  border-radius: 14px;
+  cursor: pointer;
+}
+.kid-drawer-image {
+  width: 100%;
+  height: 260px;
+  object-fit: contain;
+  padding: 12px;
+  background: #fff;
+  border: 2px solid #e7dcfa;
+  border-radius: 20px;
+}
+.kid-task-drawer .kid-drawer-image-wide { height: min(64vh, 440px); }
+.kid-drawer-steps { display: flex; flex-direction: column; gap: 12px; }
+.kid-drawer-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  background: rgba(255,255,255,.82);
+  border: 1px solid #e8def6;
+  border-radius: 16px;
+}
+.kid-drawer-step span {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  color: #fff;
+  font-weight: 800;
+  background: #ff8f5a;
+  border-radius: 50%;
+}
+.kid-drawer-step p { color: #43506e; font-size: 15px; line-height: 1.5; padding-top: 3px; }
+.kid-drawer-footer { display: flex; flex-direction: column; gap: 14px; margin-top: auto; }
+.kid-drawer-points { color: #8b5a00; font-weight: 800; }
+.kid-complete-button {
+  min-height: 52px;
+  padding: 12px 18px;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  background: linear-gradient(100deg, #ff8d56, #f2b632);
+  border: 0;
+  border-radius: 16px;
+  box-shadow: 0 5px 0 #d87938;
+  cursor: pointer;
+}
+.kid-complete-button.is-done { background: linear-gradient(100deg, #3dbf87, #69d899); box-shadow: 0 5px 0 #299466; }
+@keyframes kid-backdrop-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes kid-drawer-in { from { transform: translateX(28px); opacity: .65; } to { transform: translateX(0); opacity: 1; } }
+
+@media (max-width: 640px) {
+  .kid-mode .kid-header { padding: 18px !important; align-items: flex-start !important; }
+  .kid-mode .kid-header-right { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
+  .kid-mode .kid-content-grid { grid-template-columns: minmax(0, 1fr) !important; }
+  .kid-task-drawer { padding: 20px; }
+  .kid-drawer-image { height: 220px; }
+  .kid-task-drawer .kid-drawer-image-wide { height: min(42vh, 320px); }
+}
