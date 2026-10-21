@@ -15,7 +15,7 @@ export const AGE_CONFIG = {
     canAssignOthers: false,
     reward: { unit: 'Stars', icon: '⭐' },
     helperName: 'Buddy',
-    helperIntro: 'Hi! I am Buddy. Tap a chore\'s "How?" button or a question below and I will help you!',
+    helperIntro: 'Hi! I am Buddy. Tap any chore to see how to do it, or tap a question below and I will help you!',
     helperFreeText: false,
     helperPrompts: [
       'Can you give me a fun way to clean my room?',
