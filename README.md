@@ -45,11 +45,25 @@ The app uses a strict, modular contract designed for the hackathon:
 - **Backend Endpoint**: `POST /widget/generate-e2e-url` returns `{ url, sessionId }` and falls back seamlessly to the built-in interactive sandbox.
 
 ### 👪 Families
-- Everyone creates their own account (email or username + password) and passes the k-ID age gate themselves. Their k-ID `sessionId` is stored on the account, so it follows them across devices.
+- Everyone signs in with **Google** (Firebase Auth) and passes the k-ID age gate themselves. Their k-ID `sessionId` is stored on the account, so it follows them across devices.
 - A **k-ID verified adult** (k-ID adult verification, confirmed server-side) can create a family and becomes its admin. Admins invite people with one-time links (7-day expiry) and can make other verified adults admins. A family always keeps at least one admin.
 - People who join via an invite go through the standard k-ID flow: minors enter a parent's email for consent, and members who want to become admins verify their own age by email from the family panel.
-- `/api/ask` takes the age mode from the logged-in user's own k-ID session, not from the request.
-- Accounts and families live in `data/families.json` (gitignored). On Cloud Run this file is reset on every redeploy.
+- The family shares one chore list: adults add and assign chores to anyone, teens add chores for themselves, and everyone ticks off their own. Other phones pick up changes within about 15 seconds.
+- `/api/ask` takes the age mode from the signed-in user's own k-ID session, not from the request.
+- Users, families, invites and chores live in **Firestore**, accessed only by the server (`firestore.rules` denies all browser access).
+
+#### Firebase setup
+1. Create a Firebase project (ideally the same Google Cloud project as Cloud Run).
+2. **Authentication → Sign-in method**: enable **Google**.
+3. **Firestore Database**: create a database (production mode).
+4. **Project settings → Your apps**: add a Web app, then copy `apiKey`, `authDomain`, `projectId` and `appId` into `.env` as `FIREBASE_API_KEY`, `FIREBASE_AUTH_DOMAIN`, `FIREBASE_PROJECT_ID` and `FIREBASE_APP_ID`.
+5. Give the server access to Firestore when running locally. **Never share or commit a service-account key**; each teammate uses their own access:
+   - **Recommended (no key file):** get added to the Firebase project (**Project settings → Users and permissions**), then run `gcloud auth application-default login` and `gcloud auth application-default set-quota-project k-id-hackathon`. Leave `GOOGLE_APPLICATION_CREDENTIALS` unset.
+   - **Or** generate your own key under **Project settings → Service accounts**, save it **outside the repo**, and point `GOOGLE_APPLICATION_CREDENTIALS` at it.
+6. Deploy the rules: `firebase deploy --only firestore:rules` (or paste `firestore.rules` into the console).
+7. Hosting: see **Google Cloud Run Deployment** below. No key file is needed there.
+
+Without `FIREBASE_PROJECT_ID` the server still runs: sign-in is disabled, and `?mock-age=` demo mode works with chores kept in the browser.
 
 ### 🎭 Live Demo & Judge Fallbacks (Fail-Safe)
 If sandbox credentials or Wi-Fi are flaky during the live stage pitch:
@@ -63,20 +77,32 @@ If sandbox credentials or Wi-Fi are flaky during the live stage pitch:
 
 ## ☁️ Google Cloud Run Deployment
 
-Deploy directly from the root with the Google Cloud CLI:
+Deploy into the **same Google Cloud project as Firebase (`k-id-hackathon`)**. Cloud Run then reaches Firestore with its own built-in identity, so **no service-account key is uploaded or shared**.
+
+Prerequisites:
+- Your Google account is a member of the Firebase project with the **Editor** or **Owner** role (**Firebase console → Project settings → Users and permissions**).
+- The project is on the **Blaze (pay-as-you-go)** plan, which Cloud Run requires.
+
+Deploy from the repo root with the Google Cloud CLI:
 
 ```bash
-# Ensure you are authenticated with gcloud
+# Sign in and select the Firebase project
 gcloud auth login
-gcloud config set project YOUR_GCP_PROJECT_ID
+gcloud config set project k-id-hackathon
 
-# Deploy to Cloud Run (builds Dockerfile automatically)
+# Deploy to Cloud Run (builds the Dockerfile automatically; enable the APIs if prompted)
 gcloud run deploy home-helper \
   --source . \
   --region us-west1 \
   --allow-unauthenticated \
-  --set-env-vars GEMINI_API_KEY="YOUR_GEMINI_API_KEY",KID_SECRET_KEY="YOUR_KID_SECRET_KEY"
+  --set-env-vars GEMINI_API_KEY="YOUR_GEMINI_API_KEY",KID_SECRET_KEY="YOUR_KID_SECRET_KEY",FIREBASE_API_KEY="...",FIREBASE_AUTH_DOMAIN="k-id-hackathon.firebaseapp.com",FIREBASE_PROJECT_ID="k-id-hackathon",FIREBASE_APP_ID="..."
 ```
+
+Do **not** set `GOOGLE_APPLICATION_CREDENTIALS` on Cloud Run. The `FIREBASE_*` values are the public web-app config from **Project settings → Your apps**.
+
+After the first deploy:
+1. **Authorize the domain for Google sign-in.** In **Firebase console → Authentication → Settings → Authorized domains**, add the service's `*.run.app` host. Without this, the Google popup fails with `auth/unauthorized-domain`.
+2. **If Firestore requests fail with `PERMISSION_DENIED`:** in **Google Cloud console → IAM**, give the Cloud Run service account the **Cloud Datastore User** role. That account is shown on the service's **Security** tab, usually `PROJECT_NUMBER-compute@developer.gserviceaccount.com`. Projects whose default service account already has the Editor role don't need this.
 
 Cloud Run will output your public HTTPS service URL, ready for phone and judge demos without your laptop!
 

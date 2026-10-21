@@ -137,37 +137,50 @@ test('task chat puts the chore and its steps in the system prompt', async () => 
 
 // --- service 3: parent assistant ---
 
-test('cleanProposedChores drops bad entries and fills defaults', () => {
+const ROSTER = [
+  { id: 'u-maya', name: 'Maya', ageMode: 'kid' },
+  { id: 'u-sam', name: 'Sam', ageMode: 'teen' },
+  { id: 'u-dana', name: 'Dana', ageMode: 'adult' }
+];
+
+test('cleanProposedChores keeps only family members and fills defaults', () => {
   const cleaned = cleanProposedChores({
     chores: [
-      { title: 'Feed cat', emoji: '🐱', assignees: ['kid', 'bogus'], points: 500 },
-      { title: '  ', emoji: '🙂', assignees: ['kid'] },
-      { title: 'Pay bills', emoji: 'not an emoji at all', assignees: ['adult'], points: 20 },
-      { title: 'Laundry', assignees: ['teen'] },
-      { title: 'Nobody', assignees: [] }
+      { title: 'Feed cat', emoji: '🐱', assigneeIds: ['u-maya', 'u-stranger'], points: 500 },
+      { title: '  ', emoji: '🙂', assigneeIds: ['u-maya'] },
+      { title: 'Pay bills', emoji: 'not an emoji at all', assigneeIds: ['u-dana'], points: 20 },
+      { title: 'Laundry', assigneeIds: ['u-sam', 'u-dana'] },
+      { title: 'Nobody', assigneeIds: ['u-stranger'] }
     ]
-  });
+  }, ROSTER);
   assert.deepEqual(cleaned, [
-    { title: 'Feed cat', emoji: '🐱', assignees: ['kid'], points: 100 },
-    { title: 'Pay bills', emoji: '📝', assignees: ['adult'], points: 0 },
-    { title: 'Laundry', emoji: '📝', assignees: ['teen'], points: 15 }
+    { title: 'Feed cat', emoji: '🐱', assigneeIds: ['u-maya'], points: 100 },
+    { title: 'Pay bills', emoji: '📝', assigneeIds: ['u-dana'], points: 0 },
+    { title: 'Laundry', emoji: '📝', assigneeIds: ['u-sam', 'u-dana'], points: 15 }
   ]);
+});
+
+test('parent assistant lists the family and limits assignees to its ids', () => {
+  const payload = buildParentAssistantPayload({ history: [], message: 'add laundry' }, ROSTER);
+  assert.match(payload.systemInstruction.parts[0].text, /Maya \(kid, under 13\): id "u-maya"/);
+  const assigneeIds = payload.tools[0].functionDeclarations[0].parameters.properties.chores.items.properties.assigneeIds;
+  assert.deepEqual(assigneeIds.items.enum, ['u-maya', 'u-sam', 'u-dana']);
 });
 
 test('parent assistant returns proposed chores from a function call', async () => {
   const candidate = {
-    content: { parts: [{ functionCall: { name: 'propose_chores', args: { chores: [{ title: 'Laundry', emoji: '🧺', assignees: ['teen'] }] } } }] }
+    content: { parts: [{ functionCall: { name: 'propose_chores', args: { chores: [{ title: 'Laundry', emoji: '🧺', assigneeIds: ['u-sam'] }] } } }] }
   };
-  const result = await runParentAssistant({ history: [], message: 'add laundry' }, async (payload) => {
+  const result = await runParentAssistant({ history: [], message: 'add laundry' }, ROSTER, async (payload) => {
     assert.equal(payload.tools[0].functionDeclarations[0].name, 'propose_chores');
     return { candidate, model: 'm' };
   });
-  assert.equal(result.proposedChores.length, 1);
+  assert.deepEqual(result.proposedChores, [{ title: 'Laundry', emoji: '🧺', assigneeIds: ['u-sam'], points: 15 }]);
   assert.match(result.reply, /Tap Add/);
 });
 
 test('parent assistant plain answers have no proposed chores', async () => {
-  const result = await runParentAssistant({ history: [], message: 'hi' }, async () => ({ candidate: textCandidate('Hello'), model: 'm' }));
+  const result = await runParentAssistant({ history: [], message: 'hi' }, ROSTER, async () => ({ candidate: textCandidate('Hello'), model: 'm' }));
   assert.deepEqual(result, { reply: 'Hello', proposedChores: [], model: 'm' });
 });
 
@@ -178,7 +191,7 @@ test('client text in prompts cannot break out of its quotes', () => {
 });
 
 test('parent assistant asks for minimal thinking so suggestions come back fast', () => {
-  const payload = buildParentAssistantPayload({ history: [], message: 'add laundry' });
+  const payload = buildParentAssistantPayload({ history: [], message: 'add laundry' }, ROSTER);
   assert.deepEqual(payload.generationConfig.thinkingConfig, { thinkingLevel: 'minimal' });
 });
 

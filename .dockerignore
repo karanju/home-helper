@@ -8,3 +8,5 @@ client/dist
 *.log
 
 data
+*service-account*.json
+*firebase-adminsdk*.json

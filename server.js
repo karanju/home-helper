@@ -4,8 +4,6 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { randomUUID } from 'crypto';
-import { db, persist, getUser, findUserByLogin, getFamilyForUser, isFamilyAdmin } from './store.js';
 import { callGemini, candidateText, GeminiUnavailableError } from './ai/gemini.js';
 import { AGE_MODES, SYSTEM_PROMPTS, chatGenerationConfig } from './ai/prompts.js';
 import { InputError } from './ai/validate.js';
@@ -13,18 +11,30 @@ import { generateInstructions, parseInstructionsInput } from './ai/instructions.
 import { generateChorePoster, parseImageInput, ImageError, IMAGES_DIR, IMAGES_URL_PREFIX } from './ai/images.js';
 import { parseTaskChatInput, runTaskChat } from './ai/taskChat.js';
 import { parseParentAssistantInput, runParentAssistant } from './ai/parentAssistant.js';
-import { SEED_CHORES } from './client/src/household.js';
-import {
-  hashPassword,
-  verifyPassword,
-  randomToken,
-  issueToken,
-  revokeToken,
-  userFromRequest,
-  requireAuth
-} from './auth.js';
 
+// Load .env before store.js reads FIREBASE_* at import time
 dotenv.config();
+
+const {
+  isFirebaseConfigured,
+  HttpError,
+  getUser,
+  saveUser,
+  getFamilyForUser,
+  isFamilyAdmin,
+  createFamily,
+  updateFamilyMembers,
+  createInvite,
+  getValidInvite,
+  acceptInvite,
+  listChores,
+  getChore,
+  createChore,
+  updateChore,
+  deleteChore,
+  deleteChoresAssignedTo
+} = await import('./store.js');
+const { userFromRequest, requireAuth } = await import('./auth.js');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -109,18 +119,12 @@ async function resolveAgeMode(user) {
   return (await resolveKidProfile(user))?.mode ?? null;
 }
 
-function saveUser(user, updates) {
-  db.users[user.id] = { ...user, ...updates };
-  persist();
-  return db.users[user.id];
-}
-
 function publicUser(user) {
   return {
     id: user.id,
     displayName: user.displayName,
     email: user.email,
-    username: user.username,
+    photoURL: user.photoURL,
     adultVerified: user.adultVerified,
     kidSessionId: user.kidSessionId,
     kidChallengeId: user.kidChallengeId,
@@ -128,36 +132,33 @@ function publicUser(user) {
   };
 }
 
-function publicFamily(family) {
-  return {
-    id: family.id,
-    name: family.name,
-    members: Object.entries(family.members).map(([userId, member]) => {
-      const user = getUser(userId);
+// Each member's age mode comes from their own k-ID session, so the chore list can show and filter by person
+async function publicFamily(family) {
+  const members = await Promise.all(
+    Object.entries(family.members).map(async ([userId, member]) => {
+      const user = await getUser(userId);
       return {
         userId,
         displayName: user?.displayName || 'Unknown',
+        photoURL: user?.photoURL || null,
         role: member.role,
         adultVerified: Boolean(user?.adultVerified),
+        ageMode: user ? await resolveAgeMode(user) : null,
         joinedAt: member.joinedAt
       };
     })
-  };
+  );
+  return { id: family.id, name: family.name, members };
 }
 
-function adminCount(family) {
-  return Object.values(family.members).filter((m) => m.role === 'admin').length;
+function adminCount(members) {
+  return Object.values(members).filter((m) => m.role === 'admin').length;
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const USERNAME_PATTERN = /^[a-z0-9_.-]{3,30}$/;
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-function getValidInvite(token) {
-  const invite = db.invites[token];
-  if (!invite || new Date(invite.expiresAt) < new Date() || !db.families[invite.familyId]) return null;
-  return invite;
-}
+// Express 4 doesn't forward rejected promises to the error handler on its own
+const asyncRoute = (handler) => (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
 
 // 1. Health check endpoint
 app.get('/health', (req, res) => {
@@ -167,7 +168,8 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     service: 'home-helper',
     hasGeminiKey: Boolean(process.env.GEMINI_API_KEY),
-    hasKidSecretKey: Boolean(process.env.KID_SECRET_KEY)
+    hasKidSecretKey: Boolean(process.env.KID_SECRET_KEY),
+    hasFirebase: isFirebaseConfigured
   });
 });
 
@@ -235,9 +237,9 @@ app.post('/api/claim', async (req, res) => {
 
     // Link the claimed session to the logged-in account. A challengeId is only saved from onChallenge,
     // which fires once its email is sent; an unsent challenge is not safe to resume.
-    const user = userFromRequest(req);
+    const user = await userFromRequest(req);
     if (user && sessionId) {
-      saveUser(user, { kidSessionId: sessionId });
+      await saveUser(user, { kidSessionId: sessionId });
     }
 
     res.json({
@@ -382,91 +384,38 @@ app.post('/api/session/delete', async (req, res) => {
   }
 });
 
-// 6. Accounts
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { displayName, email, username, password } = req.body || {};
-    const name = String(displayName || '').trim();
-    const normalizedEmail = email ? String(email).trim().toLowerCase() : null;
-    const normalizedUsername = username ? String(username).trim().toLowerCase() : null;
-
-    if (!name || name.length > 40) {
-      return res.status(400).json({ error: 'Please enter a name (up to 40 characters).' });
-    }
-    if (!normalizedEmail && !normalizedUsername) {
-      return res.status(400).json({ error: 'Please enter an email or a username.' });
-    }
-    if (normalizedEmail && !EMAIL_PATTERN.test(normalizedEmail)) {
-      return res.status(400).json({ error: 'That email address does not look right.' });
-    }
-    if (normalizedUsername && !USERNAME_PATTERN.test(normalizedUsername)) {
-      return res.status(400).json({ error: 'Usernames are 3-30 letters, numbers, dots, dashes or underscores.' });
-    }
-    if (typeof password !== 'string' || password.length < 8) {
-      return res.status(400).json({ error: 'Passwords need at least 8 characters.' });
-    }
-    if (findUserByLogin(normalizedEmail) || findUserByLogin(normalizedUsername)) {
-      return res.status(409).json({ error: 'An account with that email or username already exists.' });
-    }
-
-    const { salt, passwordHash } = await hashPassword(password);
-    const user = {
-      id: randomUUID(),
-      displayName: name,
-      email: normalizedEmail,
-      username: normalizedUsername,
-      passwordHash,
-      salt,
-      kidSessionId: null,
-      kidChallengeId: null,
-      settingsChallengeId: null,
-      adultVerified: false,
-      invitedBy: null,
-      createdAt: new Date().toISOString()
-    };
-    db.users[user.id] = user;
-    persist();
-
-    res.status(201).json({ token: issueToken(user.id) });
-  } catch (err) {
-    console.error('[Auth] Signup error:', err);
-    res.status(500).json({ error: 'Could not create the account.' });
+// 6. Accounts: Google sign-in through Firebase Auth. Signing out happens in the browser only.
+app.get('/api/firebase-config', (req, res) => {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  if (!isFirebaseConfigured || !process.env.FIREBASE_API_KEY || !process.env.FIREBASE_APP_ID) {
+    return res.json({ configured: false });
   }
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { identifier, password } = req.body || {};
-    const user = findUserByLogin(identifier);
-    if (!user || typeof password !== 'string' || !(await verifyPassword(password, user))) {
-      return res.status(401).json({ error: 'Wrong email/username or password.' });
-    }
-    res.json({ token: issueToken(user.id) });
-  } catch (err) {
-    console.error('[Auth] Login error:', err);
-    res.status(500).json({ error: 'Could not log in.' });
-  }
-});
-
-app.post('/api/auth/logout', requireAuth, (req, res) => {
-  revokeToken(req.authToken);
-  res.json({ success: true });
-});
-
-app.get('/api/me', requireAuth, async (req, res) => {
-  const { user } = req;
-  const family = getFamilyForUser(user.id);
-
+  // These values are public by design; access is enforced by ID-token checks on this server
   res.json({
-    user: publicUser(user),
-    family: family ? publicFamily(family) : null,
-    isAdmin: isFamilyAdmin(family, user.id),
-    ageMode: await resolveAgeMode(user)
+    configured: true,
+    config: {
+      apiKey: process.env.FIREBASE_API_KEY,
+      authDomain: process.env.FIREBASE_AUTH_DOMAIN || `${projectId}.firebaseapp.com`,
+      projectId,
+      appId: process.env.FIREBASE_APP_ID
+    }
   });
 });
 
+app.get('/api/me', requireAuth, asyncRoute(async (req, res) => {
+  const { user } = req;
+  const family = await getFamilyForUser(user.id);
+
+  res.json({
+    user: publicUser(user),
+    family: family ? await publicFamily(family) : null,
+    isAdmin: isFamilyAdmin(family, user.id),
+    ageMode: await resolveAgeMode(user)
+  });
+}));
+
 // Persist the k-ID ids from onSession / onChallenge on the account, so they follow the user across devices
-app.post('/api/me/kid-session', requireAuth, (req, res) => {
+app.post('/api/me/kid-session', requireAuth, asyncRoute(async (req, res) => {
   const fields = { sessionId: 'kidSessionId', challengeId: 'kidChallengeId', settingsChallengeId: 'settingsChallengeId' };
   const updates = {};
 
@@ -479,358 +428,298 @@ app.post('/api/me/kid-session', requireAuth, (req, res) => {
     updates[userKey] = value;
   }
 
-  const user = saveUser(req.user, updates);
+  const user = Object.keys(updates).length ? await saveUser(req.user, updates) : req.user;
   res.json({ user: publicUser(user) });
-});
+}));
 
 // Confirm k-ID adult verification server-side; the client's word is never enough
-app.post('/api/me/verify-adult', requireAuth, async (req, res) => {
-  try {
-    if (!process.env.KID_SECRET_KEY) {
-      return res.status(503).json({ error: 'KID_SECRET_KEY is not configured on the server.' });
-    }
-    if (!req.user.kidSessionId) {
-      return res.status(409).json({ error: 'Finish the k-ID age check first.' });
-    }
-
-    const { ok, status, session } = await fetchKidSession(req.user.kidSessionId);
-    if (!ok) {
-      return res.status(502).json({ error: 'Could not read your k-ID session.', status });
-    }
-
-    const verifiedAge = session?.ageVerification?.verifiedAge;
-    const adultVerified = typeof verifiedAge === 'number' && verifiedAge >= 18;
-    const user = saveUser(req.user, { adultVerified });
-    ageModeCache.delete(user.kidSessionId);
-
-    res.json({ adultVerified, user: publicUser(user) });
-  } catch (err) {
-    console.error('[k-ID Server] Adult verification check failed:', err);
-    res.status(500).json({ error: 'Could not confirm adult verification.' });
+app.post('/api/me/verify-adult', requireAuth, asyncRoute(async (req, res) => {
+  if (!process.env.KID_SECRET_KEY) {
+    return res.status(503).json({ error: 'KID_SECRET_KEY is not configured on the server.' });
   }
-});
+  if (!req.user.kidSessionId) {
+    return res.status(409).json({ error: 'Finish the k-ID age check first.' });
+  }
+
+  const { ok, status, session } = await fetchKidSession(req.user.kidSessionId);
+  if (!ok) {
+    return res.status(502).json({ error: 'Could not read your k-ID session.', status });
+  }
+
+  const verifiedAge = session?.ageVerification?.verifiedAge;
+  const adultVerified = typeof verifiedAge === 'number' && verifiedAge >= 18;
+  const user = await saveUser(req.user, { adultVerified });
+  ageModeCache.delete(user.kidSessionId);
+
+  res.json({ adultVerified, user: publicUser(user) });
+}));
 
 // 7. Families
-app.post('/api/families', requireAuth, (req, res) => {
-  const { user } = req;
+app.post('/api/families', requireAuth, asyncRoute(async (req, res) => {
   const name = String(req.body?.name || '').trim();
 
-  if (getFamilyForUser(user.id)) {
-    return res.status(409).json({ error: 'You are already in a family.' });
-  }
-  if (!user.adultVerified) {
+  if (!req.user.adultVerified) {
     return res.status(403).json({ error: 'Only k-ID verified adults can create a family.', code: 'ADULT_VERIFICATION_REQUIRED' });
-  }
-  if (!user.email) {
-    return res.status(400).json({ error: 'Family admins need an email address so k-ID consent requests can reach them.' });
   }
   if (!name || name.length > 50) {
     return res.status(400).json({ error: 'Please enter a family name (up to 50 characters).' });
   }
 
-  const now = new Date().toISOString();
-  const family = {
-    id: randomUUID(),
-    name,
-    createdAt: now,
-    members: { [user.id]: { role: 'admin', invitedBy: null, joinedAt: now } }
-  };
-  db.families[family.id] = family;
-  persist();
+  const family = await createFamily(req.user.id, name);
+  res.status(201).json({ family: await publicFamily(family) });
+}));
 
-  res.status(201).json({ family: publicFamily(family) });
-});
-
-app.post('/api/families/invites', requireAuth, (req, res) => {
-  const family = getFamilyForUser(req.user.id);
+app.post('/api/families/invites', requireAuth, asyncRoute(async (req, res) => {
+  const family = await getFamilyForUser(req.user.id);
   if (!isFamilyAdmin(family, req.user.id)) {
     return res.status(403).json({ error: 'Only family admins can invite people.' });
   }
-  if (!req.user.email) {
-    return res.status(400).json({ error: 'Add an email to your account before inviting, so consent requests can reach you.' });
-  }
 
-  const token = randomToken();
-  const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString();
-  db.invites[token] = { familyId: family.id, invitedBy: req.user.id, expiresAt };
-  persist();
-
+  const { token, expiresAt } = await createInvite(family.id, req.user.id, INVITE_TTL_MS);
   res.status(201).json({ token, expiresAt });
-});
+}));
 
-app.get('/api/invites/:token', (req, res) => {
-  const invite = getValidInvite(req.params.token);
+app.get('/api/invites/:token', asyncRoute(async (req, res) => {
+  const invite = await getValidInvite(req.params.token);
   if (!invite) {
     return res.status(404).json({ error: 'This invite link is invalid or has expired.' });
   }
+  const inviter = await getUser(invite.invitedBy);
   res.json({
-    familyName: db.families[invite.familyId].name,
-    invitedByName: getUser(invite.invitedBy)?.displayName || 'A family admin'
+    familyName: invite.family.name,
+    invitedByName: inviter?.displayName || 'A family admin'
   });
-});
+}));
 
-app.post('/api/invites/:token/accept', requireAuth, (req, res) => {
-  const invite = getValidInvite(req.params.token);
-  if (!invite) {
-    return res.status(404).json({ error: 'This invite link is invalid or has expired.' });
-  }
+app.post('/api/invites/:token/accept', requireAuth, asyncRoute(async (req, res) => {
+  const family = await acceptInvite(req.params.token, req.user);
+  res.json({ family: await publicFamily(family) });
+}));
 
-  const currentFamily = getFamilyForUser(req.user.id);
-  if (currentFamily) {
-    return res.status(409).json({ error: `You are already in ${currentFamily.name}. Leave it first to join another family.` });
-  }
-
-  const family = db.families[invite.familyId];
-  db.families[family.id] = {
-    ...family,
-    members: {
-      ...family.members,
-      [req.user.id]: { role: 'member', invitedBy: invite.invitedBy, joinedAt: new Date().toISOString() }
-    }
-  };
-  delete db.invites[req.params.token];
-  saveUser(req.user, { invitedBy: invite.invitedBy });
-
-  res.json({ family: publicFamily(db.families[family.id]) });
-});
-
-app.patch('/api/families/members/:userId', requireAuth, (req, res) => {
-  const family = getFamilyForUser(req.user.id);
+app.patch('/api/families/members/:userId', requireAuth, asyncRoute(async (req, res) => {
+  const family = await getFamilyForUser(req.user.id);
   const targetId = req.params.userId;
   const { role } = req.body || {};
 
   if (!isFamilyAdmin(family, req.user.id)) {
     return res.status(403).json({ error: 'Only family admins can change roles.' });
   }
-  if (!family.members[targetId]) {
-    return res.status(404).json({ error: 'That person is not in your family.' });
-  }
   if (!['admin', 'member'].includes(role)) {
     return res.status(400).json({ error: 'role must be "admin" or "member"' });
   }
-  if (role === 'admin' && !getUser(targetId)?.adultVerified) {
+  if (role === 'admin' && !(await getUser(targetId))?.adultVerified) {
     return res.status(400).json({ error: 'Only k-ID verified adults can be family admins.' });
   }
-  if (role === 'member' && family.members[targetId].role === 'admin' && adminCount(family) === 1) {
-    return res.status(400).json({ error: 'A family needs at least one admin. Make someone else admin first.' });
-  }
 
-  db.families[family.id] = {
-    ...family,
-    members: { ...family.members, [targetId]: { ...family.members[targetId], role } }
-  };
-  persist();
+  const updated = await updateFamilyMembers(family.id, (current) => {
+    if (!isFamilyAdmin(current, req.user.id)) throw new HttpError(403, 'Only family admins can change roles.');
+    const target = current.members[targetId];
+    if (!target) throw new HttpError(404, 'That person is not in your family.');
+    if (role === 'member' && target.role === 'admin' && adminCount(current.members) === 1) {
+      throw new HttpError(400, 'A family needs at least one admin. Make someone else admin first.');
+    }
+    return { ...current.members, [targetId]: { ...target, role } };
+  });
 
-  res.json({ family: publicFamily(db.families[family.id]) });
-});
+  res.json({ family: await publicFamily(updated) });
+}));
 
-// Admins can remove anyone; anyone can remove themselves (leave)
-app.delete('/api/families/members/:userId', requireAuth, (req, res) => {
-  const family = getFamilyForUser(req.user.id);
+// Admins can remove anyone; anyone can remove themselves (leave). The last one out deletes the family.
+app.delete('/api/families/members/:userId', requireAuth, asyncRoute(async (req, res) => {
+  const family = await getFamilyForUser(req.user.id);
   const targetId = req.params.userId;
 
-  if (!family || !family.members[targetId]) {
+  if (!family) {
     return res.status(404).json({ error: 'That person is not in your family.' });
   }
   if (targetId !== req.user.id && !isFamilyAdmin(family, req.user.id)) {
     return res.status(403).json({ error: 'Only family admins can remove people.' });
   }
 
-  const remaining = { ...family.members };
-  delete remaining[targetId];
+  const updated = await updateFamilyMembers(family.id, (current) => {
+    const target = current.members[targetId];
+    if (!target) throw new HttpError(404, 'That person is not in your family.');
 
-  if (Object.keys(remaining).length === 0) {
-    // Last one out: drop the family and its pending invites
-    delete db.families[family.id];
-    delete db.chores[family.id];
-    for (const [token, invite] of Object.entries(db.invites)) {
-      if (invite.familyId === family.id) delete db.invites[token];
+    const remaining = { ...current.members };
+    delete remaining[targetId];
+    if (Object.keys(remaining).length > 0 && target.role === 'admin' && adminCount(current.members) === 1) {
+      throw new HttpError(400, 'A family needs at least one admin. Make someone else admin first.');
     }
-    persist();
-    return res.json({ family: null });
-  }
+    return remaining;
+  });
 
-  if (family.members[targetId].role === 'admin' && adminCount(family) === 1) {
-    return res.status(400).json({ error: 'A family needs at least one admin. Make someone else admin first.' });
-  }
+  if (updated) await deleteChoresAssignedTo(family.id, targetId);
+  res.json({ family: updated && targetId !== req.user.id ? await publicFamily(updated) : null });
+}));
 
-  db.families[family.id] = { ...family, members: remaining };
-  persist();
-
-  res.json({ family: targetId === req.user.id ? null : publicFamily(db.families[family.id]) });
-});
-
-// 8. Shared family chores: one list per family in the local store, so every member sees the same board
-
-// The family's chores; a family's first read starts it with the built-in chores
-function familyChores(family) {
-  if (!db.chores[family.id]) {
-    db.chores[family.id] = structuredClone(SEED_CHORES);
-    persist();
-  }
-  return db.chores[family.id];
+// 8. Family chores (families/{id}/chores in Firestore)
+// Adults manage everything; teens add chores for themselves; everyone ticks off their own.
+async function choreContext(req) {
+  const family = await getFamilyForUser(req.user.id);
+  if (!family) throw new HttpError(404, 'Join or create a family first.');
+  // No age mode yet (k-ID check unfinished) means the most restrictive rules
+  const ageMode = (await resolveAgeMode(req.user)) || 'kid';
+  return { family, ageMode, isAdult: ageMode === 'adult' };
 }
 
-function saveFamilyChores(family, chores) {
-  db.chores[family.id] = chores;
-  persist();
-  return chores;
-}
+// A guide still "pending" after this long was cut off (e.g. a restart) and may be retried
+const GUIDE_STALE_MS = 5 * 60 * 1000;
 
-// Change one stored chore, if it is still on the board (it may have been deleted meanwhile)
-function updateStoredChore(familyId, choreId, updates) {
-  const chores = db.chores[familyId];
-  if (!chores?.some(c => c.id === choreId)) return;
-  db.chores[familyId] = chores.map(c => (c.id === choreId ? { ...c, ...updates } : c));
-  persist();
-}
+// Background AI for a new chore: steps for the assignee's age, then a kid picture guide when a kid in the
+// family has AI Media Generation on. Results land on the stored chore; clients pick them up when they refresh.
+async function generateChoreGuide(family, chore) {
+  // The chore may be deleted while Gemini works; then there is nothing left to update
+  const update = (fields) => updateChore(family.id, chore.id, fields).catch(err => {
+    console.warn(`[AI] Could not update chore ${chore.id}: ${err.message}`);
+  });
 
-// Background AI for a new chore: steps for its age group, then a kid picture guide when a kid in the
-// family has AI Media Generation on. Results land on the stored chore; clients pick them up when they sync.
-async function generateChoreGuide(user, familyId, chore) {
   try {
-    const { byAge } = await generateInstructions({ title: chore.title, assignees: [chore.assignee], notes: null });
-    const set = byAge[chore.assignee];
+    const assignee = await getUser(chore.assigneeId);
+    // No age yet (k-ID check unfinished) means the most restrictive instructions
+    const ageMode = (assignee && await resolveAgeMode(assignee)) || 'kid';
+    const { byAge } = await generateInstructions({ title: chore.title, assignees: [ageMode], notes: null });
+    const set = byAge[ageMode];
     if (!set) throw new Error('Gemini did not return instructions');
-    updateStoredChore(familyId, chore.id, { steps: set.steps, tip: set.tip, safety: set.safety, instructionsStatus: 'ready' });
+    await update({ steps: set.steps, tip: set.tip, safety: set.safety, instructionsStatus: 'ready' });
 
-    if (chore.assignee === 'kid' && await familyKidHasPermission(user, 'ai-media-generation')) {
-      updateStoredChore(familyId, chore.id, { posterStatus: 'pending' });
+    // A failed permission lookup only skips the picture; the instructions are already saved
+    const allowPoster = ageMode === 'kid' && await familyKidHasPermission(family, 'ai-media-generation').catch(() => false);
+    if (allowPoster) {
+      await update({ posterStatus: 'pending' });
       try {
         const { imageUrl } = await generateChorePoster({ title: chore.title, steps: set.steps.slice(0, 5) });
-        updateStoredChore(familyId, chore.id, { posterUrl: imageUrl, posterStatus: 'ready' });
+        await update({ posterUrl: imageUrl, posterStatus: 'ready' });
       } catch (err) {
         console.warn(`[AI] Poster for chore ${chore.id} failed: ${err.message}`);
-        updateStoredChore(familyId, chore.id, { posterStatus: 'failed' });
+        await update({ posterStatus: 'failed' });
       }
     }
   } catch (err) {
     console.warn(`[AI] Instructions for chore ${chore.id} failed: ${err.message}`);
-    updateStoredChore(familyId, chore.id, { instructionsStatus: 'failed' });
+    await update({ instructionsStatus: 'failed' });
   }
 }
 
-// The caller's family and age mode for chore rules. Without a k-ID secret (local dev) everyone counts as an adult.
-async function choreContext(req, res) {
-  const family = getFamilyForUser(req.user.id);
-  if (!family) {
-    res.status(404).json({ error: 'Join or create a family to share chores.' });
-    return null;
+// Validates the editable chore fields present in `body`; returns only those, or throws HttpError
+function readChoreFields(body, family) {
+  const fields = {};
+  if (body.title !== undefined) {
+    const title = String(body.title).trim();
+    if (!title || title.length > 80) throw new HttpError(400, 'Chore names are 1-80 characters.');
+    fields.title = title;
   }
-  const ageMode = (await resolveAgeMode(req.user)) ?? (process.env.KID_SECRET_KEY ? null : 'adult');
-  if (!ageMode) {
-    res.status(403).json({ error: 'Finish the k-ID age check to use the family chores.', status: 'LOCKED' });
-    return null;
+  if (body.assigneeId !== undefined) {
+    if (!family.memberIds.includes(body.assigneeId)) throw new HttpError(400, 'Chores can only be assigned to family members.');
+    fields.assigneeId = body.assigneeId;
   }
-  return { family, ageMode };
+  if (body.emoji !== undefined) fields.emoji = String(body.emoji).slice(0, 8) || '📝';
+  if (body.points !== undefined) {
+    const points = Number(body.points);
+    if (!Number.isInteger(points) || points < 0 || points > 100) throw new HttpError(400, 'Points must be a whole number from 0 to 100.');
+    fields.points = points;
+  }
+  if (body.steps !== undefined) {
+    if (!Array.isArray(body.steps)) throw new HttpError(400, 'steps must be a list.');
+    fields.steps = body.steps.slice(0, 10).map((step) => String(step).slice(0, 200));
+  }
+  if (body.guideImage !== undefined) {
+    // Only the app's own bundled illustrations
+    fields.guideImage = typeof body.guideImage === 'string' && /^\/images\/[\w.-]+$/.test(body.guideImage) ? body.guideImage : null;
+  }
+  if (body.done !== undefined) fields.done = Boolean(body.done);
+  return fields;
 }
 
-app.get('/api/chores', requireAuth, async (req, res) => {
-  const ctx = await choreContext(req, res);
-  if (!ctx) return;
-  res.json({ chores: familyChores(ctx.family) });
-});
-
-// Same rules as the app: adults add chores for anyone, teens only for themselves, kids don't add chores
-app.post('/api/chores', requireAuth, async (req, res) => {
-  const ctx = await choreContext(req, res);
-  if (!ctx) return;
-
-  const title = String(req.body?.title || '').trim();
-  const { assignee, emoji, points } = req.body || {};
-  if (!title || title.length > 100) {
-    return res.status(400).json({ error: 'Please enter a chore title (up to 100 characters).' });
-  }
-  if (!AGE_MODES.includes(assignee)) {
-    return res.status(400).json({ error: `assignee must be one of ${AGE_MODES.join(', ')}.` });
-  }
-  if (!(ctx.ageMode === 'adult' || (ctx.ageMode === 'teen' && assignee === 'teen'))) {
-    return res.status(403).json({ error: 'You can\'t add chores for this family member.' });
-  }
-
-  const chore = {
-    id: randomUUID(),
-    emoji: typeof emoji === 'string' && emoji.trim() && emoji.trim().length <= 8 ? emoji.trim() : '📝',
-    title,
-    assignee,
-    points: assignee === 'adult' ? 0 : Number.isInteger(points) ? Math.min(Math.max(points, 0), 100) : 15,
-    done: false,
-    steps: [],
-    instructionsStatus: 'pending',
-    createdBy: req.user.id,
-    createdAt: new Date().toISOString()
+function publicChore(chore) {
+  return {
+    id: chore.id,
+    title: chore.title,
+    emoji: chore.emoji,
+    assigneeId: chore.assigneeId,
+    points: chore.points,
+    done: chore.done,
+    steps: chore.steps || [],
+    guideImage: chore.guideImage || null,
+    tip: chore.tip || null,
+    safety: chore.safety || null,
+    instructionsStatus: chore.instructionsStatus || null,
+    posterUrl: chore.posterUrl || null,
+    posterStatus: chore.posterStatus || null,
+    createdBy: chore.createdBy,
+    updatedAt: chore.updatedAt
   };
-  saveFamilyChores(ctx.family, [...familyChores(ctx.family), chore]);
-  res.status(201).json({ chore });
+}
 
-  generateChoreGuide(req.user, ctx.family.id, chore);
-});
+app.get('/api/families/chores', requireAuth, asyncRoute(async (req, res) => {
+  const { family } = await choreContext(req);
+  res.json({ chores: (await listChores(family.id)).map(publicChore) });
+}));
 
-// Try the AI instructions again after a failure (Gemini is often busy). Same people who could add the chore.
-app.post('/api/chores/:id/instructions', requireAuth, async (req, res) => {
-  const ctx = await choreContext(req, res);
-  if (!ctx) return;
-
-  const chore = familyChores(ctx.family).find(c => String(c.id) === req.params.id);
-  if (!chore) {
-    return res.status(404).json({ error: 'That chore is no longer on the board.' });
+app.post('/api/families/chores', requireAuth, asyncRoute(async (req, res) => {
+  const { family, ageMode, isAdult } = await choreContext(req);
+  if (!isAdult && ageMode !== 'teen') {
+    return res.status(403).json({ error: 'Ask a grown-up to add chores.' });
   }
-  if (!(ctx.ageMode === 'adult' || (ctx.ageMode === 'teen' && chore.assignee === 'teen'))) {
+
+  const fields = readChoreFields({ assigneeId: req.user.id, ...req.body, done: false }, family);
+  if (!fields.title) throw new HttpError(400, 'Chore names are 1-80 characters.');
+  if (!isAdult && fields.assigneeId !== req.user.id) {
+    return res.status(403).json({ error: 'Teens can only add chores for themselves.' });
+  }
+
+  // Chores picked from the ready-made ideas already have steps; the rest get AI instructions in the background
+  const needsGuide = !fields.steps?.length;
+  const chore = await createChore(family.id, {
+    emoji: '📝',
+    points: 15,
+    steps: [],
+    guideImage: null,
+    ...fields,
+    ...(needsGuide && { instructionsStatus: 'pending' }),
+    createdBy: req.user.id
+  });
+  res.status(201).json({ chore: publicChore(chore) });
+
+  if (needsGuide) generateChoreGuide(family, chore);
+}));
+
+// Try the AI instructions again after a failure (Gemini is often busy): adults, or the teen it belongs to
+app.post('/api/families/chores/:id/instructions', requireAuth, asyncRoute(async (req, res) => {
+  const { family, ageMode, isAdult } = await choreContext(req);
+  const chore = await getChore(family.id, req.params.id);
+  if (!chore) return res.status(404).json({ error: 'That chore no longer exists.' });
+  if (!isAdult && !(ageMode === 'teen' && chore.assigneeId === req.user.id)) {
     return res.status(403).json({ error: 'You can\'t change this chore.' });
   }
-  if (chore.instructionsStatus === 'pending') {
-    return res.json({ chore });
+  const stillWorking = chore.instructionsStatus === 'pending' && Date.now() - Date.parse(chore.updatedAt) < GUIDE_STALE_MS;
+  if (stillWorking) return res.json({ chore: publicChore(chore) });
+
+  const updated = await updateChore(family.id, chore.id, { instructionsStatus: 'pending', posterStatus: null });
+  res.json({ chore: publicChore(updated) });
+
+  generateChoreGuide(family, updated);
+}));
+
+app.patch('/api/families/chores/:id', requireAuth, asyncRoute(async (req, res) => {
+  const { family, isAdult } = await choreContext(req);
+  const chore = await getChore(family.id, req.params.id);
+  if (!chore) return res.status(404).json({ error: 'That chore no longer exists.' });
+
+  const fields = readChoreFields(req.body || {}, family);
+  const onlyTogglingDone = Object.keys(fields).every((key) => key === 'done');
+  if (!isAdult && !(onlyTogglingDone && chore.assigneeId === req.user.id)) {
+    return res.status(403).json({ error: 'You can only tick off your own chores.' });
   }
 
-  updateStoredChore(ctx.family.id, chore.id, { instructionsStatus: 'pending', posterStatus: null });
-  res.json({ chore: { ...chore, instructionsStatus: 'pending', posterStatus: null } });
+  res.json({ chore: publicChore(await updateChore(family.id, chore.id, fields)) });
+}));
 
-  generateChoreGuide(req.user, ctx.family.id, chore);
-});
-
-// Ticking a chore off: adults can tick any chore, everyone else only their own age group's
-app.patch('/api/chores/:id', requireAuth, async (req, res) => {
-  const ctx = await choreContext(req, res);
-  if (!ctx) return;
-
-  const { done } = req.body || {};
-  if (typeof done !== 'boolean') {
-    return res.status(400).json({ error: 'done must be true or false.' });
-  }
-  const chores = familyChores(ctx.family);
-  const chore = chores.find(c => String(c.id) === req.params.id);
-  if (!chore) {
-    return res.status(404).json({ error: 'That chore is no longer on the board.' });
-  }
-  if (ctx.ageMode !== 'adult' && chore.assignee !== ctx.ageMode) {
-    return res.status(403).json({ error: 'That chore belongs to someone else.' });
-  }
-
-  const updated = { ...chore, done };
-  saveFamilyChores(ctx.family, chores.map(c => (c === chore ? updated : c)));
-  res.json({ chore: updated });
-});
-
-app.delete('/api/chores/:id', requireAuth, async (req, res) => {
-  const ctx = await choreContext(req, res);
-  if (!ctx) return;
-  if (ctx.ageMode !== 'adult') {
-    return res.status(403).json({ error: 'Only adults can remove chores.' });
-  }
-  const chores = familyChores(ctx.family);
-  saveFamilyChores(ctx.family, chores.filter(c => String(c.id) !== req.params.id));
+app.delete('/api/families/chores/:id', requireAuth, asyncRoute(async (req, res) => {
+  const { family, isAdult } = await choreContext(req);
+  if (!isAdult) return res.status(403).json({ error: 'Only adults can remove chores.' });
+  await deleteChore(family.id, req.params.id);
   res.json({ success: true });
-});
-
-// "New day": uncheck every chore for the family
-app.post('/api/chores/new-day', requireAuth, async (req, res) => {
-  const ctx = await choreContext(req, res);
-  if (!ctx) return;
-  if (ctx.ageMode !== 'adult') {
-    return res.status(403).json({ error: 'Only adults can start a new day.' });
-  }
-  res.json({ chores: saveFamilyChores(ctx.family, familyChores(ctx.family).map(c => ({ ...c, done: false }))) });
-});
+}));
 
 // 2. k-ID widget URL generation endpoint (Modular Placeholder Slot)
 app.post('/widget/generate-e2e-url', async (req, res) => {
@@ -889,9 +778,9 @@ async function resolveRequestAgeMode(req) {
     return { ageMode: asMode(ageMode), can: () => true, user: null };
   }
 
-  const user = userFromRequest(req);
+  const user = await userFromRequest(req);
   if (!user) {
-    return { error: { status: 401, body: { error: 'Please log in to continue.' } } };
+    return { error: { status: 401, body: { error: 'Please sign in to continue.' } } };
   }
   if (!process.env.KID_SECRET_KEY) {
     return { ageMode: asMode(ageMode), can: () => true, user };
@@ -910,17 +799,26 @@ async function resolveRequestAgeMode(req) {
   return { ageMode: profile.mode, can: (name) => profile.mode === 'adult' || profile.permissions[name] === true, user };
 }
 
-// Whether any kid in the user's family has a k-ID permission on, read from each kid's own session
-async function familyKidHasPermission(user, name) {
-  const family = getFamilyForUser(user.id);
-  if (!family) return false;
-  const profiles = await Promise.all(Object.keys(family.members).map(userId => resolveKidProfile(getUser(userId))));
+// Whether any kid in the family has a k-ID permission on, read from each kid's own session
+async function familyKidHasPermission(family, name) {
+  const profiles = await Promise.all(family.memberIds.map(async (userId) => resolveKidProfile(await getUser(userId))));
   return profiles.some(profile => profile?.mode === 'kid' && profile.permissions[name] === true);
+}
+
+// Who the parent assistant can give chores to: the family's members, or the three age groups without a family
+async function choreRoster(user) {
+  const family = user && await getFamilyForUser(user.id);
+  if (!family) {
+    return AGE_MODES.map(mode => ({ id: mode, name: mode[0].toUpperCase() + mode.slice(1), ageMode: mode }));
+  }
+  const { members } = await publicFamily(family);
+  return members.map(m => ({ id: m.userId, name: m.displayName.split(' ')[0], ageMode: m.ageMode || 'kid' }));
 }
 
 // Shared tail for the AI routes: bad input is a 400, a Gemini outage a 502
 function sendAiError(res, err, label) {
   if (err instanceof InputError) return res.status(400).json({ error: err.message });
+  if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
   if (err instanceof ImageError) return res.status(err.status).json({ error: err.message });
   if (err instanceof GeminiUnavailableError) return res.status(502).json({ error: err.message, details: err.details });
   console.error(`Error in ${label}:`, err);
@@ -1007,7 +905,8 @@ app.post('/api/ai/chore-image', async (req, res) => {
     const access = await resolveRequestAgeMode(req);
     if (access.error) return res.status(access.error.status).json(access.error.body);
 
-    if (access.user && !(await familyKidHasPermission(access.user, 'ai-media-generation'))) {
+    const family = access.user && await getFamilyForUser(access.user.id);
+    if (access.user && !(family && await familyKidHasPermission(family, 'ai-media-generation'))) {
       return res.status(403).json({ error: 'No kid in this family has AI pictures turned on.', code: 'PERMISSION_REQUIRED' });
     }
 
@@ -1045,7 +944,7 @@ app.post('/api/ai/parent-assistant', async (req, res) => {
       return res.status(403).json({ error: 'Only adults can add chores from the chat.' });
     }
 
-    res.json(await runParentAssistant(input));
+    res.json(await runParentAssistant(input, await choreRoster(access.user)));
   } catch (err) {
     sendAiError(res, err, '/api/ai/parent-assistant');
   }
@@ -1053,6 +952,15 @@ app.post('/api/ai/parent-assistant', async (req, res) => {
 
 // Generated picture guides (data/images until Firebase Storage takes over)
 app.use(IMAGES_URL_PREFIX, express.static(IMAGES_DIR));
+
+// Rule violations from the store (HttpError) become their own status; anything else is a 500
+app.use((err, req, res, next) => {
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ error: err.message, ...(err.code && { code: err.code }) });
+  }
+  console.error(`[Server] ${req.method} ${req.path} failed:`, err);
+  res.status(500).json({ error: 'Something went wrong on the server.' });
+});
 
 // Serve static frontend files from client/dist
 const clientDistPath = path.join(__dirname, 'client', 'dist');
