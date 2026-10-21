@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Users } from 'lucide-react';
+import { House, Users } from 'lucide-react';
 import { apiFetch, signInWithGoogle } from '../auth';
 
 // Popup errors that just mean "the person closed it" don't deserve an error message
@@ -48,116 +48,39 @@ export default function AuthScreen({ inviteToken, isConfigured }) {
   };
 
   return (
-    <main style={styles.main}>
-      <div style={styles.card}>
+    <main className="auth">
+      <div className="auth-content">
+        <span className="auth-icon"><House size={34} strokeWidth={2} /></span>
+        <h1 className="large-title">Home Helper</h1>
+        <p className="auth-subtitle">Your family's chores, with help that fits every age.</p>
+
         {invite && (
-          <div style={styles.inviteBanner}>
-            <Users size={18} color="#a5b4fc" style={{ flexShrink: 0 }} />
+          <div className="auth-invite">
+            <Users size={18} />
             <span>
               <strong>{invite.invitedByName}</strong> invited you to join <strong>{invite.familyName}</strong>
             </span>
           </div>
         )}
-        {inviteError && <p style={styles.error}>{inviteError}</p>}
-
-        <h1 style={styles.title}>Welcome to Home Helper</h1>
-        <p style={styles.subtitle}>Your family's chores, with help that fits every age.</p>
+        {inviteError && <p className="footnote text-danger">{inviteError}</p>}
 
         {isConfigured ? (
-          <button type="button" onClick={handleSignIn} style={styles.googleBtn} disabled={isSigningIn}>
+          <button type="button" onClick={handleSignIn} className="google-btn" disabled={isSigningIn}>
             <GoogleMark />
             <span>{isSigningIn ? 'Signing in…' : 'Continue with Google'}</span>
           </button>
         ) : (
-          <p style={styles.notice}>
+          <p className="auth-notice footnote">
             Sign-in isn't configured on this server yet. You can still try the app with <code>?mock-age=kid</code>, <code>teen</code> or <code>adult</code>.
           </p>
         )}
 
-        {error && <p style={{ ...styles.error, marginTop: 12 }}>{error}</p>}
+        {error && <p className="footnote text-danger">{error}</p>}
 
-        <p style={styles.footnote}>
+        <p className="footnote auth-footnote">
           After signing in, everyone goes through a quick k-ID age check so Home Helper fits their age.
         </p>
       </div>
     </main>
   );
 }
-
-const styles = {
-  main: {
-    maxWidth: '440px',
-    margin: '36px auto',
-    padding: '0 16px 80px',
-    width: '100%',
-  },
-  card: {
-    backgroundColor: '#131c2e',
-    border: '1px solid #1e293b',
-    borderRadius: '18px',
-    padding: '24px',
-    boxShadow: '0 20px 40px -15px rgba(0, 0, 0, 0.7)',
-  },
-  inviteBanner: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    fontSize: '14px',
-    color: '#e2e8f0',
-    background: 'rgba(99, 102, 241, 0.12)',
-    border: '1px solid rgba(99, 102, 241, 0.3)',
-    borderRadius: '12px',
-    padding: '12px 14px',
-    marginBottom: '18px',
-  },
-  title: {
-    fontSize: '22px',
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  subtitle: {
-    fontSize: '14px',
-    color: '#94a3b8',
-    marginTop: '6px',
-    marginBottom: '22px',
-    lineHeight: 1.5,
-  },
-  // Follows Google's sign-in button guidance: white button, "G" mark, neutral text
-  googleBtn: {
-    width: '100%',
-    minHeight: '48px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '12px',
-    backgroundColor: '#ffffff',
-    border: '1px solid #dadce0',
-    borderRadius: '10px',
-    color: '#1f1f1f',
-    fontSize: '15px',
-    fontWeight: '600',
-    fontFamily: 'inherit',
-    cursor: 'pointer',
-  },
-  notice: {
-    fontSize: '13px',
-    color: '#cbd5e1',
-    lineHeight: 1.6,
-    background: '#0f172a',
-    border: '1px solid #334155',
-    borderRadius: '10px',
-    padding: '12px 14px',
-  },
-  error: {
-    fontSize: '13px',
-    color: '#f87171',
-    margin: 0,
-  },
-  footnote: {
-    fontSize: '12px',
-    color: '#64748b',
-    lineHeight: 1.5,
-    marginTop: '18px',
-    textAlign: 'center',
-  }
-};

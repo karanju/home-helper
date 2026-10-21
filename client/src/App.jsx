@@ -17,7 +17,23 @@ import AuthScreen from './components/AuthScreen';
 import FamilyPanel from './components/FamilyPanel';
 import { DemoModeContext } from './components/FeatureGate';
 import { apiFetch, authHeaders, initAuth, onAuthChange, signOutUser } from './auth';
-import { Shield, Clock, AlertTriangle, XCircle } from 'lucide-react';
+import { Clock, House, ShieldCheck, TriangleAlert, CircleX } from 'lucide-react';
+
+// k-ID widgets take their colors from our tokens, so they follow light/dark and the age accent
+const K_ID_APPEARANCE = {
+  variables: {
+    colorPrimary: 'var(--accent)',
+    colorOnPrimary: 'var(--on-accent)',
+    colorText: 'var(--label)',
+    colorTextMuted: 'var(--label-2)',
+    colorSurface: 'var(--surface)',
+    colorSurfaceMuted: 'var(--fill)',
+    colorBorder: 'var(--separator)',
+    colorDanger: 'var(--danger)',
+    fontFamily: 'var(--font-text)',
+    radius: 'var(--radius-control)'
+  }
+};
 
 const K_ID_CONFIG = {
   publishableKey: 'kgp_test_ckcqom36ppaaaeytysmy4puoznneommzdbrfljfiheuwewt4aiulgxeqf3q77xy',
@@ -45,20 +61,36 @@ function GateFrame({ children }) {
 
   return (
     <>
-      <header style={styles.topHeader}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <span style={{ fontSize: '26px' }}>🏠</span>
-          <span style={styles.brandTitle}>Home Helper</span>
-        </div>
-        <div style={styles.badge}>
-          <Shield size={14} color="#818cf8" />
-          <span>k-ID Verified Gate</span>
-        </div>
-      </header>
-      <main style={styles.gateMain}>
-        <div style={styles.gateWrapper}>{children}</div>
+      <BrandBar>
+        <span className="badge is-neutral"><ShieldCheck size={12} strokeWidth={2.5} /> Age check by k-ID</span>
+      </BrandBar>
+      <main className="gate-main">
+        <div className="card gate-card">{children}</div>
       </main>
     </>
+  );
+}
+
+function BrandBar({ children }) {
+  return (
+    <header className="gate-bar">
+      <div className="brand">
+        <span className="brand-mark"><House size={16} strokeWidth={2.25} /></span>
+        <span className="brand-name">Home Helper</span>
+      </div>
+      {children}
+    </header>
+  );
+}
+
+function SlotCard({ icon: Icon, tone, title, children, action }) {
+  return (
+    <div className="slot-card">
+      <span className={`slot-icon is-${tone}`}><Icon size={26} /></span>
+      <h2 className="title">{title}</h2>
+      <p className="subhead">{children}</p>
+      {action}
+    </div>
   );
 }
 
@@ -307,21 +339,16 @@ export default function App() {
 
   if (isAuthLoading) {
     return (
-      <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#090d16', color: '#94a3b8', padding: '40px', textAlign: 'center' }}>
-        Loading…
+      <div className="app-container app-loading" aria-busy="true">
+        <div className="spinner" />
+        <span className="visually-hidden">Loading</span>
       </div>
     );
   }
 
   if (!me) {
     return (
-      <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#090d16', color: '#f8fafc' }}>
-        <header style={styles.topHeader}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '26px' }}>🏠</span>
-            <span style={styles.brandTitle}>Home Helper</span>
-          </div>
-        </header>
+      <div className="app-container">
         <AuthScreen inviteToken={inviteToken} isConfigured={isSignInConfigured} />
       </div>
     );
@@ -333,6 +360,7 @@ export default function App() {
       publishableKey={K_ID_CONFIG.publishableKey}
       baseUrl={K_ID_CONFIG.baseUrl}
       declare={K_ID_CONFIG.declare}
+      appearance={K_ID_APPEARANCE}
     >
       {/* Keyed by account so switching users starts a fresh k-ID flow */}
       <KidSessionProvider
@@ -344,61 +372,51 @@ export default function App() {
         onChallenge={handleChallenge}
         onClaim={handleClaim}
       >
-        <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#090d16', color: '#f8fafc' }}>
+        <div className="app-container">
           {/* k-ID All-In-One Age Gate Container */}
           <GateFrame>
               <KidAgeGate>
                 {/* 1. Pending slot: Waiting on parent email consent */}
                 <KidAgeGatePending>
-                  <div style={styles.slotCard}>
-                    <Clock size={40} color="#f59e0b" style={{ marginBottom: 16 }} />
-                    <h2 style={styles.slotTitle}>Parental Consent Requested</h2>
-                    <p style={styles.slotDesc}>
-                      We have sent an approval link to your parent or guardian. As soon as they approve, Home Helper will automatically unlock!
-                    </p>
-                  </div>
+                  <SlotCard icon={Clock} tone="waiting" title="Waiting for a grown-up">
+                    We sent an approval link to your parent or guardian. Home Helper unlocks as soon as they approve.
+                  </SlotCard>
                 </KidAgeGatePending>
 
                 {/* 2. Prohibited slot: Under jurisdiction minimum age */}
                 <KidAgeGateProhibited>
-                  <div style={styles.slotCard}>
-                    <XCircle size={40} color="#ef4444" style={{ marginBottom: 16 }} />
-                    <h2 style={styles.slotTitle}>Age Requirement Notice</h2>
-                    <p style={styles.slotDesc}>
-                      Under local safety regulations, users under the required minimum age cannot access this application.
-                    </p>
-                    <button onClick={handleRestartAgeCheck} style={styles.retryBtn}>
-                      Try Again
-                    </button>
-                  </div>
+                  <SlotCard
+                    icon={CircleX}
+                    tone="danger"
+                    title="Not available yet"
+                    action={<button type="button" className="btn btn-gray" onClick={handleRestartAgeCheck}>Try again</button>}
+                  >
+                    Local rules don't allow people under the minimum age to use Home Helper.
+                  </SlotCard>
                 </KidAgeGateProhibited>
 
                 {/* 3. Fail slot: Consent denied or challenge expired */}
                 <KidAgeGateFail>
-                  <div style={styles.slotCard}>
-                    <AlertTriangle size={40} color="#f87171" style={{ marginBottom: 16 }} />
-                    <h2 style={styles.slotTitle}>Verification Incomplete</h2>
-                    <p style={styles.slotDesc}>
-                      The age verification request was not completed or consent was declined.
-                    </p>
-                    <button onClick={handleRestartAgeCheck} style={styles.retryBtn}>
-                      Start Over
-                    </button>
-                  </div>
+                  <SlotCard
+                    icon={TriangleAlert}
+                    tone="danger"
+                    title="Verification incomplete"
+                    action={<button type="button" className="btn btn-gray" onClick={handleRestartAgeCheck}>Start over</button>}
+                  >
+                    The age check wasn't finished, or consent was declined.
+                  </SlotCard>
                 </KidAgeGateFail>
 
                 {/* 4. Error slot: Coarse SDK / network failure */}
                 <KidAgeGateError>
-                  <div style={styles.slotCard}>
-                    <AlertTriangle size={40} color="#f59e0b" style={{ marginBottom: 16 }} />
-                    <h2 style={styles.slotTitle}>Connection Notice</h2>
-                    <p style={styles.slotDesc}>
-                      Could not reach k-ID authentication service. Please check your connection.
-                    </p>
-                    <button onClick={() => setFlowKey((k) => k + 1)} style={styles.retryBtn}>
-                      Retry Connection
-                    </button>
-                  </div>
+                  <SlotCard
+                    icon={TriangleAlert}
+                    tone="waiting"
+                    title="Can't reach k-ID"
+                    action={<button type="button" className="btn btn-gray" onClick={() => setFlowKey((k) => k + 1)}>Retry</button>}
+                  >
+                    Check your connection and try again.
+                  </SlotCard>
                 </KidAgeGateError>
 
                 {/* 5. Pass slot: Verified and unlocked! */}
@@ -441,81 +459,3 @@ export default function App() {
     </KidCoreProvider>
   );
 }
-
-const styles = {
-  topHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '14px 16px',
-    gap: '12px',
-    borderBottom: '1px solid #1e293b',
-    backgroundColor: '#0c1220',
-  },
-  brandTitle: {
-    fontSize: '20px',
-    fontWeight: '800',
-    whiteSpace: 'nowrap',
-    background: 'linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%)',
-    WebkitBackgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
-  },
-  badge: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    fontSize: '11px',
-    fontWeight: '700',
-    letterSpacing: '0.5px',
-    textTransform: 'uppercase',
-    background: 'rgba(99, 102, 241, 0.15)',
-    color: '#a5b4fc',
-    border: '1px solid rgba(99, 102, 241, 0.3)',
-    padding: '6px 12px',
-    borderRadius: '9999px',
-    whiteSpace: 'nowrap',
-  },
-  gateMain: {
-    maxWidth: '520px',
-    margin: '24px auto',
-    padding: '0 16px 80px',
-    width: '100%',
-  },
-  gateWrapper: {
-    backgroundColor: '#131c2e',
-    border: '1px solid #1e293b',
-    borderRadius: '18px',
-    padding: '12px',
-    boxShadow: '0 20px 40px -15px rgba(0, 0, 0, 0.7)',
-  },
-  slotCard: {
-    textAlign: 'center',
-    padding: '32px 16px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-  },
-  slotTitle: {
-    fontSize: '20px',
-    fontWeight: '700',
-    color: '#ffffff',
-    marginBottom: '10px',
-  },
-  slotDesc: {
-    fontSize: '14px',
-    color: '#94a3b8',
-    lineHeight: 1.6,
-    maxWidth: '380px',
-    marginBottom: '20px',
-  },
-  retryBtn: {
-    backgroundColor: '#1e293b',
-    border: '1px solid #334155',
-    color: '#ffffff',
-    padding: '10px 20px',
-    borderRadius: '10px',
-    fontSize: '13px',
-    fontWeight: '600',
-    cursor: 'pointer',
-  }
-};
