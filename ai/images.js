@@ -1,7 +1,6 @@
-import fs from 'fs/promises';
-import path from 'path';
 import { randomUUID } from 'crypto';
-import { fileURLToPath } from 'url';
+import { getApps } from 'firebase-admin/app';
+import { getStorage } from 'firebase-admin/storage';
 import { promptSafe, requiredString, stringList } from './validate.js';
 
 // The free Gemini tier has no image models, so posters go through Puter, server-side with our own token.
@@ -9,8 +8,8 @@ import { promptSafe, requiredString, stringList } from './validate.js';
 export const IMAGE_MODELS = ['google/gemini-3-pro-image', 'google/gemini-3.1-flash-image'];
 const IMAGE_TIMEOUT_MS = 120 * 1000;
 
-export const IMAGES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'images');
-export const IMAGES_URL_PREFIX = '/generated';
+// Posters live in Firebase Storage: the server's own disk is wiped on every Cloud Run deploy
+const POSTERS_FOLDER = 'posters';
 
 const EXTENSIONS = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
@@ -72,13 +71,39 @@ export async function imageBytes(src) {
   return { mimeType, buffer: Buffer.from(await res.arrayBuffer()) };
 }
 
+export function storageBucketName() {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  return process.env.FIREBASE_STORAGE_BUCKET || (projectId ? `${projectId}.firebasestorage.app` : null);
+}
+
+// The download token makes this one file public without opening the bucket (Storage rules don't apply to it)
+export function publicImageUrl(bucketName, objectPath, token) {
+  return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
+}
+
 async function saveImage({ mimeType, buffer }) {
   const ext = EXTENSIONS[mimeType];
   if (!ext) throw new Error(`Unexpected image type ${mimeType}`);
-  const fileName = `${randomUUID()}.${ext}`;
-  await fs.mkdir(IMAGES_DIR, { recursive: true });
-  await fs.writeFile(path.join(IMAGES_DIR, fileName), buffer);
-  return `${IMAGES_URL_PREFIX}/${fileName}`;
+  const bucketName = storageBucketName();
+  if (!bucketName || !getApps().length) throw new ImageError('Firebase Storage is not configured on the server.', 503);
+
+  const objectPath = `${POSTERS_FOLDER}/${randomUUID()}.${ext}`;
+  const token = randomUUID();
+  try {
+    await getStorage().bucket(bucketName).file(objectPath).save(buffer, {
+      resumable: false,
+      metadata: {
+        contentType: mimeType,
+        cacheControl: 'public, max-age=31536000, immutable',
+        metadata: { firebaseStorageDownloadTokens: token }
+      }
+    });
+  } catch (err) {
+    // A storage failure isn't the image model's fault, so don't burn another generation on the fallback model
+    console.error(`[AI] Could not upload poster to ${bucketName}: ${err.message}`);
+    throw new ImageError('Could not store the picture guide.', 503);
+  }
+  return publicImageUrl(bucketName, objectPath, token);
 }
 
 async function puterTxt2img(prompt, model) {

@@ -5,7 +5,7 @@ import { InputError, toGeminiContents } from './validate.js';
 import { buildInstructionsPayload, generateInstructions, parseAgeSet, parseInstructionsInput } from './instructions.js';
 import { buildTaskChatPayload, parseTaskChatInput, runTaskChat } from './taskChat.js';
 import { buildParentAssistantPayload, cleanProposedChores, parseParentAssistantInput, runParentAssistant } from './parentAssistant.js';
-import { buildPosterPrompt, generateChorePoster, imageBytes, ImageError, parseImageInput } from './images.js';
+import { buildPosterPrompt, generateChorePoster, imageBytes, ImageError, parseImageInput, publicImageUrl, storageBucketName } from './images.js';
 
 const textCandidate = (text) => ({ content: { parts: [{ text }] } });
 
@@ -115,6 +115,40 @@ test('poster without a Puter token is a 503', async () => {
     await assert.rejects(generateChorePoster({ title: 'x', steps: ['a'] }), (err) => err.status === 503);
   } finally {
     if (saved !== undefined) process.env.PUTER_AUTH_TOKEN = saved;
+  }
+});
+
+test('poster without Firebase Storage is a 503 and skips the fallback model', async () => {
+  let calls = 0;
+  await assert.rejects(
+    generateChorePoster({ title: 'x', steps: ['a'] }, {
+      txt2img: async () => { calls++; return 'data:image/png;base64,AAAA'; }
+    }),
+    (err) => err instanceof ImageError && err.status === 503
+  );
+  assert.equal(calls, 1);
+});
+
+test('poster URLs point at Firebase Storage with the object path encoded', () => {
+  assert.equal(
+    publicImageUrl('demo.firebasestorage.app', 'posters/a.png', 'tok'),
+    'https://firebasestorage.googleapis.com/v0/b/demo.firebasestorage.app/o/posters%2Fa.png?alt=media&token=tok'
+  );
+});
+
+test('storage bucket defaults to the project bucket', () => {
+  const saved = { bucket: process.env.FIREBASE_STORAGE_BUCKET, project: process.env.FIREBASE_PROJECT_ID };
+  delete process.env.FIREBASE_STORAGE_BUCKET;
+  process.env.FIREBASE_PROJECT_ID = 'demo';
+  try {
+    assert.equal(storageBucketName(), 'demo.firebasestorage.app');
+    process.env.FIREBASE_STORAGE_BUCKET = 'custom-bucket';
+    assert.equal(storageBucketName(), 'custom-bucket');
+  } finally {
+    for (const [key, value] of [['FIREBASE_STORAGE_BUCKET', saved.bucket], ['FIREBASE_PROJECT_ID', saved.project]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 });
 

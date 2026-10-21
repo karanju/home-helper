@@ -8,7 +8,7 @@ import { callGemini, candidateText, GeminiUnavailableError } from './ai/gemini.j
 import { AGE_MODES, SYSTEM_PROMPTS, chatGenerationConfig } from './ai/prompts.js';
 import { InputError } from './ai/validate.js';
 import { generateInstructions, parseInstructionsInput } from './ai/instructions.js';
-import { generateChorePoster, parseImageInput, ImageError, IMAGES_DIR, IMAGES_URL_PREFIX } from './ai/images.js';
+import { generateChorePoster, parseImageInput, ImageError } from './ai/images.js';
 import { parseTaskChatInput, runTaskChat } from './ai/taskChat.js';
 import { parseParentAssistantInput, runParentAssistant } from './ai/parentAssistant.js';
 
@@ -950,8 +950,8 @@ app.post('/api/ai/parent-assistant', async (req, res) => {
   }
 });
 
-// Generated picture guides (data/images until Firebase Storage takes over)
-app.use(IMAGES_URL_PREFIX, express.static(IMAGES_DIR));
+// Picture guides saved on disk before posters moved to Firebase Storage
+app.use('/generated', express.static(path.join(__dirname, 'data', 'images')));
 
 // Rule violations from the store (HttpError) become their own status; anything else is a 500
 app.use((err, req, res, next) => {
